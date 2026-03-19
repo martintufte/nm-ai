@@ -19,9 +19,6 @@ from nmai.tasks.astar_island.client import (
     AstarIslandClient,
     MAP_SIZE,
     NUM_CLASSES,
-    NUM_SEEDS,
-    QUERY_BUDGET,
-    VIEWPORT_SIZE,
 )
 
 
@@ -88,7 +85,7 @@ def update_predictions_from_observations(
 def run_prediction_pipeline(client: AstarIslandClient, round_id: int) -> None:
     """Full prediction pipeline for a round."""
     # 1. Get round info
-    round_data = client.get_round(round_id)
+    _round_data = client.get_round(round_id)
     budget = client.get_budget()
     print(f"Round {round_id}: budget remaining = {budget}")
 

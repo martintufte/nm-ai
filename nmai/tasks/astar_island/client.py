@@ -26,11 +26,11 @@ QUERY_BUDGET = 50
 # Terrain class mapping
 TERRAIN_CLASSES = {
     0: "Ocean/Plains/Empty",  # Static
-    1: "Settlement",          # Dynamic
-    2: "Port",                # Coastal settlements
-    3: "Ruin",                # Collapsed settlements
-    4: "Forest",              # Reclaims abandoned land
-    5: "Mountain",            # Permanent
+    1: "Settlement",  # Dynamic
+    2: "Port",  # Coastal settlements
+    3: "Ruin",  # Collapsed settlements
+    4: "Forest",  # Reclaims abandoned land
+    5: "Mountain",  # Permanent
 }
 
 
