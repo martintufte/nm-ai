@@ -106,6 +106,7 @@ venv/
 # mkdocs documentation
 /site
 
-# NorgesGruppen data:
+# NorgesGruppen Data:
 norgesgruppen/data/NM_NGD_coco_dataset/
 norgesgruppen/data/NM_NGD_product_images/
+norgesgruppen/output/*/predictions.json

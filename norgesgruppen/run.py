@@ -19,6 +19,11 @@ from pathlib import Path
 import torch
 from ultralytics import YOLO
 
+from norgesgruppen.evaluate import evaluate
+from norgesgruppen.run_utils import copy_predictions
+from norgesgruppen.run_utils import copy_weights
+from norgesgruppen.run_utils import create_run_dir
+
 LOGGER = logging.getLogger(__name__)
 
 # Confidence and NMS thresholds -- tune these on validation set
@@ -26,6 +31,25 @@ CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 IMG_SIZE = 1280
 MAX_DETECTIONS = 300
+
+
+def infer_annotations_path(images_dir: Path) -> Path | None:
+    """Infer a local COCO annotations path from the images directory."""
+    candidate = images_dir.parent / "annotations.json"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def finalize_local_run(
+    output_path: Path,
+    run_dir: Path,
+    annotations_path: Path | None,
+) -> None:
+    """Persist predictions and optionally calculate a local score."""
+    copied_predictions = copy_predictions(output_path, run_dir)
+    if annotations_path is not None:
+        evaluate(copied_predictions, annotations_path)
 
 
 def load_model(weights_dir: Path) -> YOLO:
@@ -81,14 +105,14 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
     """Run inference on all test images and write results."""
     weights_dir = Path(__file__).parent
 
-    # Load model
-    model = load_model(weights_dir)
-
     # Get all test images
     image_paths = sorted(images_dir.glob("img_*.jpg"))
     LOGGER.info("Found %d images", len(image_paths))
 
     all_detections = []
+
+    # Load model (unless dummy mode)
+    model = load_model(weights_dir)
 
     with torch.no_grad():
         for idx, img_path in enumerate(image_paths):
@@ -120,6 +144,14 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
     with output_path.open("w") as f:
         json.dump(all_detections, f)
 
+    run_dir = create_run_dir("run")
+    copy_weights(weights_dir, run_dir / "model_weights")
+    finalize_local_run(
+        output_path=output_path,
+        run_dir=run_dir,
+        annotations_path=infer_annotations_path(images_dir),
+    )
+
     LOGGER.info(
         "Done: %d detections from %d images",
         len(all_detections),
@@ -136,7 +168,24 @@ def main() -> None:
         help="Input images directory",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output JSON path")
+    parser.add_argument(
+        "--dummy",
+        action="store_true",
+        help="Write an empty prediction file without loading model weights",
+    )
     args = parser.parse_args()
+
+    if args.dummy:
+        args.output.write_text("[]")
+        run_dir = create_run_dir("run_dummy")
+        (run_dir / "model_weights").mkdir(parents=True, exist_ok=True)
+        finalize_local_run(
+            output_path=args.output,
+            run_dir=run_dir,
+            annotations_path=infer_annotations_path(args.images),
+        )
+        LOGGER.info("Dummy mode: wrote empty predictions to %s", args.output)
+        return
 
     run_inference(args.images, args.output)
 
