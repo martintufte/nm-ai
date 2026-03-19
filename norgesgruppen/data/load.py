@@ -1,21 +1,12 @@
-"""Data loading for Norgesgruppen grocery detection task.
-
-Usage:
-    from nmai.tasks.norgesgruppen.data.load import (
-        load_coco_annotations,
-        load_product_references,
-        get_category_mapping,
-        get_annotation_stats,
-    )
-"""
+"""Data loading for Norgesgruppen grocery detection task."""
 
 import json
 from collections import Counter
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent
-COCO_DIR = DATA_DIR / "coco"
-REFERENCE_DIR = DATA_DIR / "product_references"
+COCO_DIR = DATA_DIR / "NM_NGD_coco_dataset"
+REFERENCE_DIR = DATA_DIR / "NM_NGD_product_images"
 
 
 def load_coco_annotations(annotations_path: Path | None = None) -> dict:

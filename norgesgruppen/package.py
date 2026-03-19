@@ -6,7 +6,7 @@ Creates a ZIP file with:
     category_map.json - Category ID mapping (if multi-class)
 
 Usage:
-    python -m nmai.tasks.norgesgruppen.package [--weights path/to/best.pt] [--output submission.zip]
+    python -m norgesgruppen.package [--weights path/to/best.pt] [--output submission.zip]
 """
 
 import argparse
@@ -69,7 +69,9 @@ def package_submission(
             if cat_map_path.exists():
                 with cat_map_path.open() as f:
                     coco = json.load(f)
-                categories = {cat["id"]: cat["name"] for cat in coco.get("categories", [])}
+                categories = {
+                    cat["id"]: cat["name"] for cat in coco.get("categories", [])
+                }
                 zf.writestr("category_map.json", json.dumps(categories, indent=2))
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
