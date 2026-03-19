@@ -5,7 +5,6 @@ Usage:
 """
 
 from collections import Counter
-from pathlib import Path
 
 from nmai.tasks.norgesgruppen.data.load import (
     load_coco_annotations,
@@ -30,12 +29,12 @@ def explore() -> None:
     print(f"Annotations: {stats['num_annotations']}")
     print(f"Categories:  {stats['num_categories']}")
 
-    print(f"\nAnnotations per image:")
+    print("\nAnnotations per image:")
     print(f"  Mean: {stats['annotations_per_image']['mean']:.1f}")
     print(f"  Min:  {stats['annotations_per_image']['min']}")
     print(f"  Max:  {stats['annotations_per_image']['max']}")
 
-    print(f"\nAnnotations per category:")
+    print("\nAnnotations per category:")
     print(f"  Mean: {stats['annotations_per_category']['mean']:.1f}")
     print(f"  Min:  {stats['annotations_per_category']['min']}")
     print(f"  Max:  {stats['annotations_per_category']['max']}")
@@ -43,12 +42,12 @@ def explore() -> None:
     # Category distribution
     categories = get_category_mapping(annotations)
     cat_counts = Counter(a["category_id"] for a in annotations["annotations"])
-    print(f"\nTop 10 categories:")
+    print("\nTop 10 categories:")
     for cat_id, count in cat_counts.most_common(10):
         name = categories.get(cat_id, f"unknown_{cat_id}")
         print(f"  {cat_id:>4d}: {name:<40s} ({count} annotations)")
 
-    print(f"\nBottom 10 categories:")
+    print("\nBottom 10 categories:")
     for cat_id, count in cat_counts.most_common()[-10:]:
         name = categories.get(cat_id, f"unknown_{cat_id}")
         print(f"  {cat_id:>4d}: {name:<40s} ({count} annotations)")
@@ -67,7 +66,7 @@ def explore() -> None:
 
     areas.sort()
     n = len(areas)
-    print(f"\nBbox relative area (fraction of image):")
+    print("\nBbox relative area (fraction of image):")
     print(f"  Median: {areas[n // 2]:.5f}")
     print(f"  P10:    {areas[n // 10]:.5f}")
     print(f"  P90:    {areas[9 * n // 10]:.5f}")
@@ -86,6 +85,7 @@ def explore() -> None:
     image_paths = get_image_paths()
     if image_paths:
         from PIL import Image
+
         sizes = set()
         for p in image_paths[:10]:
             img = Image.open(p)

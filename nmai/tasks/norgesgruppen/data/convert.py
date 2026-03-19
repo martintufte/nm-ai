@@ -22,11 +22,12 @@ from pathlib import Path
 
 from nmai.tasks.norgesgruppen.data.load import COCO_DIR
 
-
 YOLO_DIR = Path(__file__).parent / "yolo"
 
 
-def coco_to_yolo_bbox(bbox: list[float], img_w: int, img_h: int) -> tuple[float, float, float, float]:
+def coco_to_yolo_bbox(
+    bbox: list[float], img_w: int, img_h: int
+) -> tuple[float, float, float, float]:
     """Convert COCO bbox [x, y, w, h] (pixels) to YOLO [cx, cy, w, h] (normalized)."""
     x, y, w, h = bbox
     cx = (x + w / 2) / img_w
@@ -131,15 +132,21 @@ def convert_coco_to_yolo(
     print(f"YOLO dataset created at {YOLO_DIR}")
     print(f"  Train: {len(train_ids)} images")
     print(f"  Val:   {len(val_ids)} images")
-    print(f"  Classes: {num_classes} ({'single-class' if single_class else 'multi-class'})")
+    print(
+        f"  Classes: {num_classes} ({'single-class' if single_class else 'multi-class'})"
+    )
 
     return yaml_path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert COCO to YOLO format")
-    parser.add_argument("--single-class", action="store_true", help="Detection-only (all class 0)")
-    parser.add_argument("--val-fraction", type=float, default=0.15, help="Validation split fraction")
+    parser.add_argument(
+        "--single-class", action="store_true", help="Detection-only (all class 0)"
+    )
+    parser.add_argument(
+        "--val-fraction", type=float, default=0.15, help="Validation split fraction"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for split")
     args = parser.parse_args()
 

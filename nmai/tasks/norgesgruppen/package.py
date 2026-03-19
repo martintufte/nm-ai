@@ -49,7 +49,7 @@ def package_submission(
     if not run_py.exists():
         raise FileNotFoundError(f"run.py not found at {run_py}")
 
-    print(f"Packaging submission:")
+    print("Packaging submission:")
     print(f"  run.py:  {run_py}")
     print(f"  weights: {weights_path}")
 
@@ -66,7 +66,9 @@ def package_submission(
             if cat_map_path.exists():
                 with open(cat_map_path) as f:
                     coco = json.load(f)
-                categories = {cat["id"]: cat["name"] for cat in coco.get("categories", [])}
+                categories = {
+                    cat["id"]: cat["name"] for cat in coco.get("categories", [])
+                }
                 zf.writestr("category_map.json", json.dumps(categories, indent=2))
 
     size_mb = output_path.stat().st_size / (1024 * 1024)

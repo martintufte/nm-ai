@@ -57,6 +57,7 @@ def get_annotation_stats(annotations: dict) -> dict:
 
     # Annotations per image
     from collections import Counter
+
     img_counts = Counter(a["image_id"] for a in annots)
     cat_counts = Counter(a["category_id"] for a in annots)
 
@@ -93,7 +94,9 @@ def load_product_references(reference_dir: Path | None = None) -> dict[str, list
     for product_dir in sorted(reference_dir.iterdir()):
         if product_dir.is_dir():
             product_code = product_dir.name
-            images = sorted(product_dir.glob("*.jpg")) + sorted(product_dir.glob("*.png"))
+            images = sorted(product_dir.glob("*.jpg")) + sorted(
+                product_dir.glob("*.png")
+            )
             if images:
                 products[product_code] = images
 

@@ -146,7 +146,9 @@ def evaluate(weights_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Norgesgruppen detection model")
-    parser.add_argument("--mode", choices=["detect", "classify", "export", "eval"], required=True)
+    parser.add_argument(
+        "--mode", choices=["detect", "classify", "export", "eval"], required=True
+    )
     parser.add_argument("--model-size", default="m", choices=["n", "s", "m", "l", "x"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--imgsz", type=int, default=1280)

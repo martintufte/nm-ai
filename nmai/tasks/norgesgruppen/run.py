@@ -18,7 +18,6 @@ from pathlib import Path
 import torch
 from ultralytics import YOLO
 
-
 # Confidence and NMS thresholds -- tune these on validation set
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
@@ -64,11 +63,13 @@ def predict_image(model: YOLO, image_path: Path) -> list[dict]:
             w = float(x2 - x1)
             h = float(y2 - y1)
 
-            detections.append({
-                "bbox": [float(x1), float(y1), w, h],
-                "category_id": int(boxes.cls[i].cpu().item()),
-                "score": float(boxes.conf[i].cpu().item()),
-            })
+            detections.append(
+                {
+                    "bbox": [float(x1), float(y1), w, h],
+                    "category_id": int(boxes.cls[i].cpu().item()),
+                    "score": float(boxes.conf[i].cpu().item()),
+                }
+            )
 
     return detections
 
@@ -103,8 +104,10 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
                 )
 
             if (idx + 1) % 10 == 0:
-                print(f"  Processed {idx + 1}/{len(image_paths)} images "
-                      f"({len(all_detections)} detections so far)")
+                print(
+                    f"  Processed {idx + 1}/{len(image_paths)} images "
+                    f"({len(all_detections)} detections so far)"
+                )
 
     # Write output
     with open(output_path, "w") as f:
