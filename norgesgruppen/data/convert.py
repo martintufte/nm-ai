@@ -20,7 +20,7 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
-from nmai.tasks.norgesgruppen.data.load import COCO_DIR
+from norgesgruppen.data.load import COCO_DIR
 
 YOLO_DIR = Path(__file__).parent / "yolo"
 

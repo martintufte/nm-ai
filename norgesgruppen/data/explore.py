@@ -6,7 +6,7 @@ Usage:
 
 from collections import Counter
 
-from nmai.tasks.norgesgruppen.data.load import (
+from norgesgruppen.data.load import (
     load_coco_annotations,
     get_annotation_stats,
     get_category_mapping,

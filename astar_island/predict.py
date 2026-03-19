@@ -15,7 +15,7 @@ import argparse
 import numpy as np
 from numpy.typing import NDArray
 
-from nmai.tasks.astar_island.client import (
+from astar_island.client import (
     AstarIslandClient,
     MAP_SIZE,
     NUM_CLASSES,
