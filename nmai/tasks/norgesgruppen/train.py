@@ -6,8 +6,6 @@ Usage:
     python -m nmai.tasks.norgesgruppen.train
 """
 
-from pathlib import Path
-
 from nmai.tasks.norgesgruppen.data.load import (
     load_coco_annotations,
     get_image_paths,

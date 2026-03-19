@@ -67,12 +67,14 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
             detections = detect_products(model, image)
 
             for det in detections:
-                all_detections.append({
-                    "image_id": image_id,
-                    "bbox": det["bbox"],
-                    "category_id": det["category_id"],
-                    "score": det["score"],
-                })
+                all_detections.append(
+                    {
+                        "image_id": image_id,
+                        "bbox": det["bbox"],
+                        "category_id": det["category_id"],
+                        "score": det["score"],
+                    }
+                )
 
     # Write output
     with open(output_path, "w") as f:
@@ -83,7 +85,9 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grocery product detection")
-    parser.add_argument("--images", type=Path, required=True, help="Input images directory")
+    parser.add_argument(
+        "--images", type=Path, required=True, help="Input images directory"
+    )
     parser.add_argument("--output", type=Path, required=True, help="Output JSON path")
     args = parser.parse_args()
 

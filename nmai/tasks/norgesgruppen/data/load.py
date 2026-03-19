@@ -63,7 +63,9 @@ def load_product_references(reference_dir: Path | None = None) -> dict[str, list
     for product_dir in sorted(reference_dir.iterdir()):
         if product_dir.is_dir():
             barcode = product_dir.name
-            images = sorted(product_dir.glob("*.jpg")) + sorted(product_dir.glob("*.png"))
+            images = sorted(product_dir.glob("*.jpg")) + sorted(
+                product_dir.glob("*.png")
+            )
             if images:
                 products[barcode] = images
 

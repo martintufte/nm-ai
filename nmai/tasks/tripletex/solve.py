@@ -34,7 +34,9 @@ def get_tripletex_session(base_url: str, session_token: str) -> requests.Session
     return session
 
 
-def tripletex_get(session: requests.Session, endpoint: str, params: dict | None = None) -> dict:
+def tripletex_get(
+    session: requests.Session, endpoint: str, params: dict | None = None
+) -> dict:
     """GET request to Tripletex API."""
     url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
     response = session.get(url, params=params)
@@ -65,7 +67,9 @@ def tripletex_delete(session: requests.Session, endpoint: str) -> None:
     response.raise_for_status()
 
 
-def parse_and_execute_task(task_prompt: str, session: requests.Session, files: list[str] | None) -> None:
+def parse_and_execute_task(
+    task_prompt: str, session: requests.Session, files: list[str] | None
+) -> None:
     """Parse the task prompt and execute the appropriate Tripletex API calls.
 
     TODO: Implement task parsing and execution logic.
