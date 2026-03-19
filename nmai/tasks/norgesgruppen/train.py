@@ -49,7 +49,7 @@ def train_detection(
     model_name = f"yolov8{model_size}.pt"
     model = YOLO(model_name)
 
-    results = model.train(
+    _results = model.train(
         data=str(YOLO_DATA),
         epochs=epochs,
         imgsz=imgsz,
@@ -96,7 +96,7 @@ def train_classification(
         model_name = f"yolov8{model_size}.pt"
         model = YOLO(model_name)
 
-    results = model.train(
+    _results = model.train(
         data=str(YOLO_DATA),
         epochs=epochs,
         imgsz=imgsz,
