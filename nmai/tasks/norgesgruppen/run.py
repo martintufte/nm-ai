@@ -1,14 +1,14 @@
 """Norgesgruppen grocery product detection - Submission entry point.
 
-This is the file that gets executed in the competition environment:
-    python run.py --images /data/images/ --output /output.json
+This file runs in the sandboxed competition environment:
+    python run.py --images /data/images/ --output /tmp/output.json
 
-Environment:
-    - GPU: NVIDIA L4 (24 GB VRAM)
-    - Timeout: 300 seconds
-    - No internet access
-    - Pre-installed: PyTorch 2.6.0+cu124, torchvision, ultralytics 8.1.0, etc.
-    - Security: Blocks os, subprocess, socket, eval(), exec()
+IMPORTANT sandbox constraints:
+    - Cannot import: os, sys, subprocess, socket, shutil, yaml, requests, etc.
+    - Must use pathlib instead of os
+    - Must use json instead of yaml
+    - GPU: NVIDIA L4 (24 GB VRAM), timeout: 300 seconds
+    - ultralytics 8.1.0 is pre-installed
 """
 
 import argparse
@@ -16,38 +16,65 @@ import json
 from pathlib import Path
 
 import torch
-from PIL import Image
+from ultralytics import YOLO
 
 
-def load_model(weights_dir: Path) -> object:
-    """Load the detection model.
-
-    TODO: Implement model loading.
-    Options:
-    - ultralytics YOLOv8 (pre-installed)
-    - Custom torchvision Faster R-CNN
-    - ONNX model via onnxruntime-gpu
-    - timm backbone + custom head
-    """
-    raise NotImplementedError("Implement model loading")
+# Confidence and NMS thresholds -- tune these on validation set
+CONF_THRESHOLD = 0.25
+IOU_THRESHOLD = 0.45
+IMG_SIZE = 1280
+MAX_DETECTIONS = 300
 
 
-def detect_products(
-    model: object,
-    image: Image.Image,
-) -> list[dict]:
-    """Run detection on a single image.
+def load_model(weights_dir: Path) -> YOLO:
+    """Load YOLOv8 model from weights in the submission directory."""
+    # Try different weight formats in priority order
+    for name in ["best.pt", "model.pt", "best.onnx", "model.onnx"]:
+        weights_path = weights_dir / name
+        if weights_path.exists():
+            print(f"Loading model from {weights_path}")
+            model = YOLO(str(weights_path))
+            model.fuse()
+            return model
 
-    Returns list of detections, each with:
-        - bbox: [x, y, width, height]
-        - category_id: int
-        - score: float
-    """
-    raise NotImplementedError("Implement detection logic")
+    raise FileNotFoundError(f"No model weights found in {weights_dir}")
+
+
+def predict_image(model: YOLO, image_path: Path) -> list[dict]:
+    """Run detection on a single image, return list of detections."""
+    results = model.predict(
+        source=str(image_path),
+        conf=CONF_THRESHOLD,
+        iou=IOU_THRESHOLD,
+        imgsz=IMG_SIZE,
+        max_det=MAX_DETECTIONS,
+        verbose=False,
+        half=True,
+    )
+
+    detections = []
+    for result in results:
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            continue
+
+        for i in range(len(boxes)):
+            # xyxy -> xywh (COCO format)
+            x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+            w = float(x2 - x1)
+            h = float(y2 - y1)
+
+            detections.append({
+                "bbox": [float(x1), float(y1), w, h],
+                "category_id": int(boxes.cls[i].cpu().item()),
+                "score": float(boxes.conf[i].cpu().item()),
+            })
+
+    return detections
 
 
 def run_inference(images_dir: Path, output_path: Path) -> None:
-    """Run inference on all images and write results."""
+    """Run inference on all test images and write results."""
     weights_dir = Path(__file__).parent
 
     # Load model
@@ -60,11 +87,10 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
     all_detections = []
 
     with torch.no_grad():
-        for img_path in image_paths:
-            image_id = img_path.stem  # e.g., "img_00042"
-            image = Image.open(img_path).convert("RGB")
+        for idx, img_path in enumerate(image_paths):
+            image_id = img_path.stem
 
-            detections = detect_products(model, image)
+            detections = predict_image(model, img_path)
 
             for det in detections:
                 all_detections.append({
@@ -74,11 +100,15 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
                     "score": det["score"],
                 })
 
+            if (idx + 1) % 10 == 0:
+                print(f"  Processed {idx + 1}/{len(image_paths)} images "
+                      f"({len(all_detections)} detections so far)")
+
     # Write output
     with open(output_path, "w") as f:
         json.dump(all_detections, f)
 
-    print(f"Wrote {len(all_detections)} detections to {output_path}")
+    print(f"Done: {len(all_detections)} detections from {len(image_paths)} images")
 
 
 def main() -> None:
