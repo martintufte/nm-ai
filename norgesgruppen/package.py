@@ -11,8 +11,11 @@ Usage:
 
 import argparse
 import json
+import logging
 import zipfile
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 TASK_DIR = Path(__file__).parent
 RUNS_DIR = TASK_DIR / "runs"
@@ -49,9 +52,9 @@ def package_submission(
     if not run_py.exists():
         raise FileNotFoundError(f"run.py not found at {run_py}")
 
-    print("Packaging submission:")
-    print(f"  run.py:  {run_py}")
-    print(f"  weights: {weights_path}")
+    LOGGER.info("Packaging submission:")
+    LOGGER.info("  run.py:  %s", run_py)
+    LOGGER.info("  weights: %s", weights_path)
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         # run.py must be at root of ZIP
@@ -64,19 +67,17 @@ def package_submission(
         if include_category_map:
             cat_map_path = TASK_DIR / "data" / "coco" / "annotations.json"
             if cat_map_path.exists():
-                with open(cat_map_path) as f:
+                with cat_map_path.open() as f:
                     coco = json.load(f)
-                categories = {
-                    cat["id"]: cat["name"] for cat in coco.get("categories", [])
-                }
+                categories = {cat["id"]: cat["name"] for cat in coco.get("categories", [])}
                 zf.writestr("category_map.json", json.dumps(categories, indent=2))
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
-    print(f"\nCreated: {output_path} ({size_mb:.1f} MB)")
+    LOGGER.info("Created: %s (%.1f MB)", output_path, size_mb)
 
     if size_mb > 420:
-        print(f"WARNING: ZIP is {size_mb:.1f} MB, exceeds ~420 MB limit!")
-        print("Consider using FP16 export or a smaller model.")
+        LOGGER.warning("ZIP is %.1f MB, exceeds ~420 MB limit!", size_mb)
+        LOGGER.warning("Consider using FP16 export or a smaller model.")
 
     return output_path
 

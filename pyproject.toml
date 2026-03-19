@@ -1,9 +1,10 @@
 [project]
 name = "nm-ai"
 version = "0.1.0"
-description = "Add your description here"
+description = "Norwegian championship in AI"
 readme = "README.md"
 requires-python = ">=3.13"
+
 dependencies = [
     "fastapi>=0.135.1",
     "numpy>=2.4.3",
@@ -16,3 +17,63 @@ dependencies = [
     "ty>=0.0.24",
     "ultralytics>=8.4.24",
 ]
+
+[tool.black]
+line-length = 100
+target-version = ['py313']
+preview = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# The purpose of selecting all rules is to expose ourselves to any new rule that comes with
+# updating Ruff. To ensure we get as much benefit as we can out of Ruff, it makes sense to
+# operate a blacklist, rather than a whitelist.
+select = ["ALL"]
+ignore = [
+    # Rules that are intentionally disabled because we don't want them
+    "TD003",    # missing-todo-link: Requiring issue tracker links for TODOs would be a lot of work
+    "TRY203",   # raise-without-from-inside-except: Used to inform docstring about raises
+    "ERA001",   # commented-out-code: Allow commented-out code
+
+    # Rules disabled early in the project that may or may not be desirable.
+    "D1",       # Missing docstrings (D100-D107)
+    "TRY003",   # raise-vanilla-args
+    "PLR2004",  # magic-value-comparison
+    "PLR0913",  # too-many-arguments
+    "PLR0915",  # too-many-statements
+    "PLR0912",  # too-many-branches
+    "PLR0911",  # too-many-return-statements
+
+    # The following checks started firing when we switched to select = ["ALL"]
+    "S101",     # assert
+    "E501",     # line-too-long
+    "EM102",    # f-string-in-exception
+    "FBT001",   # boolean-type-hint-positional-argument
+    "TC001",    # typing-only-first-party-import
+    "TC003",    # typing-only-standard-library-import
+    "FBT002",   # boolean-default-value-positional-argument
+    "EM101",    # raw-string-in-exception
+    "TC002",    # typing-only-third-party-import
+    "RET504",   # unnecessary-assign
+    "G004",     # logging-f-string
+    "ARG002",   # unused-method-argument
+    "SLF001",   # private-member-access
+    "TC006",    # runtime-cast-value
+    "FIX002",   # line-contains-todo
+    "ARG001",   # unused-function-argument
+    "A002",     # builtin-argument-shadowing
+    "C901",     # complex-structure
+    "A001",     # builtin-variable-shadowing
+    "ARG003",   # unused-class-method-argument
+    "S106",     # hardcoded-password-func-arg
+    "S607",     # start-process-with-partial-path
+    "S301",     # suspicious-pickle-usage
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+force-single-line = true

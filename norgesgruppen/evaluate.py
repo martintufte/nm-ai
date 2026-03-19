@@ -3,15 +3,18 @@
 Scoring: 70% detection mAP (IoU>=0.5, ignore class) + 30% classification mAP (IoU>=0.5 + correct class)
 
 Usage:
-    python -m nmai.tasks.norgesgruppen.evaluate --predictions output.json --annotations data/coco/annotations.json
+    python -m norgesgruppen.evaluate --predictions output.json --annotations data/coco/annotations.json
 """
 
 import argparse
 import json
-from pathlib import Path
+import logging
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
 
 
 def compute_iou(box1: list[float], box2: list[float]) -> float:
@@ -36,8 +39,8 @@ def compute_ap(precisions: list[float], recalls: list[float]) -> float:
         return 0.0
 
     # Add sentinel values
-    precisions = [0.0] + precisions + [0.0]
-    recalls = [0.0] + recalls + [1.0]
+    precisions = [0.0, *precisions, 0.0]
+    recalls = [0.0, *recalls, 1.0]
 
     # Make precision monotonically decreasing
     for i in range(len(precisions) - 2, -1, -1):
@@ -47,7 +50,7 @@ def compute_ap(precisions: list[float], recalls: list[float]) -> float:
     ap = 0.0
     for t in np.linspace(0, 1, 101):
         p = 0.0
-        for r, pr in zip(recalls, precisions):
+        for r, pr in zip(recalls, precisions, strict=False):
             if r >= t:
                 p = max(p, pr)
         ap += p
@@ -103,11 +106,7 @@ def evaluate_map(
         total_gt = 0
         gt_matched: dict[str, list[bool]] = {}
         for img_id, gt_anns in gt_by_image.items():
-            cat_gt = (
-                gt_anns
-                if ignore_class
-                else [a for a in gt_anns if a["category_id"] == cat]
-            )
+            cat_gt = gt_anns if ignore_class else [a for a in gt_anns if a["category_id"] == cat]
             total_gt += len(cat_gt)
             gt_matched[img_id] = [False] * len(cat_gt)
 
@@ -119,11 +118,7 @@ def evaluate_map(
         for pred in cat_preds:
             img_id = pred["image_id"]
             gt_anns = gt_by_image.get(img_id, [])
-            cat_gt = (
-                gt_anns
-                if ignore_class
-                else [a for a in gt_anns if a["category_id"] == cat]
-            )
+            cat_gt = gt_anns if ignore_class else [a for a in gt_anns if a["category_id"] == cat]
 
             best_iou = 0.0
             best_idx = -1
@@ -136,9 +131,7 @@ def evaluate_map(
             matched_flags = gt_matched.get(img_id, [])
             # Filter to only category-specific indices
             if not ignore_class:
-                cat_indices = [
-                    i for i, a in enumerate(gt_anns) if a["category_id"] == cat
-                ]
+                cat_indices = [i for i, a in enumerate(gt_anns) if a["category_id"] == cat]
                 if best_idx >= 0 and best_idx < len(cat_indices):
                     global_idx = cat_indices[best_idx]
                 else:
@@ -146,11 +139,7 @@ def evaluate_map(
             else:
                 global_idx = best_idx
 
-            if (
-                best_iou >= iou_threshold
-                and global_idx >= 0
-                and not matched_flags[best_idx]
-            ):
+            if best_iou >= iou_threshold and global_idx >= 0 and not matched_flags[best_idx]:
                 tp_list.append(1)
                 matched_flags[best_idx] = True
             else:
@@ -171,24 +160,23 @@ def evaluate_map(
 
 def evaluate(predictions_path: Path, annotations_path: Path) -> None:
     """Run full evaluation matching competition scoring."""
-    with open(predictions_path) as f:
+    with predictions_path.open() as f:
         predictions = json.load(f)
-    with open(annotations_path) as f:
+    with annotations_path.open() as f:
         ground_truth = json.load(f)
 
-    print(f"Predictions: {len(predictions)}")
-    print(f"Ground truth images: {len(ground_truth['images'])}")
-    print(f"Ground truth annotations: {len(ground_truth['annotations'])}")
-    print()
+    LOGGER.info("Predictions: %d", len(predictions))
+    LOGGER.info("Ground truth images: %d", len(ground_truth["images"]))
+    LOGGER.info("Ground truth annotations: %d", len(ground_truth["annotations"]))
 
     detection_map = evaluate_map(predictions, ground_truth, ignore_class=True)
     classification_map = evaluate_map(predictions, ground_truth, ignore_class=False)
 
     final_score = 0.7 * detection_map + 0.3 * classification_map
 
-    print(f"Detection mAP@0.5:       {detection_map:.4f}  (weight: 70%)")
-    print(f"Classification mAP@0.5:  {classification_map:.4f}  (weight: 30%)")
-    print(f"Final score:             {final_score:.4f}")
+    LOGGER.info("Detection mAP@0.5:       %.4f  (weight: 70%%)", detection_map)
+    LOGGER.info("Classification mAP@0.5:  %.4f  (weight: 30%%)", classification_map)
+    LOGGER.info("Final score:             %.4f", final_score)
 
 
 def main() -> None:

@@ -11,8 +11,8 @@ Usage:
     client.submit(round_id=1, predictions=predictions_array)
 """
 
-import requests
 import numpy as np
+import requests
 from numpy.typing import NDArray
 
 BASE_URL = "https://api.ainm.no/astar-island"
@@ -35,7 +35,7 @@ TERRAIN_CLASSES = {
 
 
 class AstarIslandClient:
-    def __init__(self, token: str):
+    def __init__(self, token: str) -> None:
         self.session = requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {token}"})
 

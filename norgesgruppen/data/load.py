@@ -10,6 +10,7 @@ Usage:
 """
 
 import json
+from collections import Counter
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent
@@ -33,7 +34,7 @@ def load_coco_annotations(annotations_path: Path | None = None) -> dict:
     if annotations_path is None:
         annotations_path = COCO_DIR / "annotations.json"
 
-    with open(annotations_path) as f:
+    with annotations_path.open() as f:
         return json.load(f)
 
 
@@ -54,9 +55,6 @@ def get_annotation_stats(annotations: dict) -> dict:
     annots = annotations.get("annotations", [])
     images = annotations.get("images", [])
     categories = annotations.get("categories", [])
-
-    # Annotations per image
-    from collections import Counter
 
     img_counts = Counter(a["image_id"] for a in annots)
     cat_counts = Counter(a["category_id"] for a in annots)
@@ -95,7 +93,7 @@ def load_product_references(reference_dir: Path | None = None) -> dict[str, list
         if product_dir.is_dir():
             product_code = product_dir.name
             images = sorted(product_dir.glob("*.jpg")) + sorted(
-                product_dir.glob("*.png")
+                product_dir.glob("*.png"),
             )
             if images:
                 products[product_code] = images

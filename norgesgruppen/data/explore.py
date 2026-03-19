@@ -1,19 +1,22 @@
-"""Explore and visualize the Norgesgruppen dataset.
+"""Explore and visualize the NorgesGruppen dataset.
 
 Usage:
-    python -m nmai.tasks.norgesgruppen.data.explore
+    python -m norgesgruppen.data.explore
 """
 
+import logging
 from collections import Counter
 
-from norgesgruppen.data.load import (
-    load_coco_annotations,
-    get_annotation_stats,
-    get_category_mapping,
-    get_image_paths,
-    load_product_references,
-    build_product_code_to_category,
-)
+from PIL import Image
+
+from norgesgruppen.data.load import build_product_code_to_category
+from norgesgruppen.data.load import get_annotation_stats
+from norgesgruppen.data.load import get_category_mapping
+from norgesgruppen.data.load import get_image_paths
+from norgesgruppen.data.load import load_coco_annotations
+from norgesgruppen.data.load import load_product_references
+
+LOGGER = logging.getLogger(__name__)
 
 
 def explore() -> None:
@@ -21,36 +24,36 @@ def explore() -> None:
     annotations = load_coco_annotations()
     stats = get_annotation_stats(annotations)
 
-    print("=" * 60)
-    print("NORGESGRUPPEN DATASET OVERVIEW")
-    print("=" * 60)
+    LOGGER.info("=" * 60)
+    LOGGER.info("NORGESGRUPPEN DATASET OVERVIEW")
+    LOGGER.info("=" * 60)
 
-    print(f"\nImages:      {stats['num_images']}")
-    print(f"Annotations: {stats['num_annotations']}")
-    print(f"Categories:  {stats['num_categories']}")
+    LOGGER.info("Images:      %d", stats["num_images"])
+    LOGGER.info("Annotations: %d", stats["num_annotations"])
+    LOGGER.info("Categories:  %d", stats["num_categories"])
 
-    print("\nAnnotations per image:")
-    print(f"  Mean: {stats['annotations_per_image']['mean']:.1f}")
-    print(f"  Min:  {stats['annotations_per_image']['min']}")
-    print(f"  Max:  {stats['annotations_per_image']['max']}")
+    LOGGER.info("Annotations per image:")
+    LOGGER.info("  Mean: %.1f", stats["annotations_per_image"]["mean"])
+    LOGGER.info("  Min:  %d", stats["annotations_per_image"]["min"])
+    LOGGER.info("  Max:  %d", stats["annotations_per_image"]["max"])
 
-    print("\nAnnotations per category:")
-    print(f"  Mean: {stats['annotations_per_category']['mean']:.1f}")
-    print(f"  Min:  {stats['annotations_per_category']['min']}")
-    print(f"  Max:  {stats['annotations_per_category']['max']}")
+    LOGGER.info("Annotations per category:")
+    LOGGER.info("  Mean: %.1f", stats["annotations_per_category"]["mean"])
+    LOGGER.info("  Min:  %d", stats["annotations_per_category"]["min"])
+    LOGGER.info("  Max:  %d", stats["annotations_per_category"]["max"])
 
     # Category distribution
     categories = get_category_mapping(annotations)
     cat_counts = Counter(a["category_id"] for a in annotations["annotations"])
-    print("\nTop 10 categories:")
+    LOGGER.info("Top 10 categories:")
     for cat_id, count in cat_counts.most_common(10):
         name = categories.get(cat_id, f"unknown_{cat_id}")
-        print(f"  {cat_id:>4d}: {name:<40s} ({count} annotations)")
+        LOGGER.info("  %4d: %-40s (%d annotations)", cat_id, name, count)
 
-    print("\nBottom 10 categories:")
+    LOGGER.info("Bottom 10 categories:")
     for cat_id, count in cat_counts.most_common()[-10:]:
         name = categories.get(cat_id, f"unknown_{cat_id}")
-        print(f"  {cat_id:>4d}: {name:<40s} ({count} annotations)")
+        LOGGER.info("  %4d: %-40s (%d annotations)", cat_id, name, count)
 
     # Bbox size distribution
     annots = annotations["annotations"]
@@ -66,31 +69,29 @@ def explore() -> None:
 
     areas.sort()
     n = len(areas)
-    print("\nBbox relative area (fraction of image):")
-    print(f"  Median: {areas[n // 2]:.5f}")
-    print(f"  P10:    {areas[n // 10]:.5f}")
-    print(f"  P90:    {areas[9 * n // 10]:.5f}")
-    print(f"  Min:    {areas[0]:.5f}")
-    print(f"  Max:    {areas[-1]:.5f}")
+    LOGGER.info("Bbox relative area (fraction of image):")
+    LOGGER.info("  Median: %.5f", areas[n // 2])
+    LOGGER.info("  P10:    %.5f", areas[n // 10])
+    LOGGER.info("  P90:    %.5f", areas[9 * n // 10])
+    LOGGER.info("  Min:    %.5f", areas[0])
+    LOGGER.info("  Max:    %.5f", areas[-1])
 
     # Check product references
     refs = load_product_references()
     pc_to_cat = build_product_code_to_category(annotations)
-    print(f"\nProduct references: {len(refs)} products")
-    print(f"Product codes in annotations: {len(pc_to_cat)}")
+    LOGGER.info("Product references: %d products", len(refs))
+    LOGGER.info("Product codes in annotations: %d", len(pc_to_cat))
     overlap = set(refs.keys()) & set(pc_to_cat.keys())
-    print(f"Overlap (refs ∩ annotations): {len(overlap)}")
+    LOGGER.info("Overlap (refs ∩ annotations): %d", len(overlap))
 
     # Image sizes
     image_paths = get_image_paths()
     if image_paths:
-        from PIL import Image
-
         sizes = set()
         for p in image_paths[:10]:
             img = Image.open(p)
             sizes.add(img.size)
-        print(f"\nSample image sizes: {sizes}")
+        LOGGER.info("Sample image sizes: %s", sizes)
 
 
 if __name__ == "__main__":

@@ -6,9 +6,9 @@ Usage:
     uvicorn nmai.tasks.tripletex.solve:app --host 0.0.0.0 --port 8080
 """
 
+import requests
 from fastapi import FastAPI
 from pydantic import BaseModel
-import requests
 
 app = FastAPI(title="Tripletex AI Agent")
 
@@ -35,7 +35,9 @@ def get_tripletex_session(base_url: str, session_token: str) -> requests.Session
 
 
 def tripletex_get(
-    session: requests.Session, endpoint: str, params: dict | None = None
+    session: requests.Session,
+    endpoint: str,
+    params: dict | None = None,
 ) -> dict:
     """GET request to Tripletex API."""
     url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
@@ -68,7 +70,9 @@ def tripletex_delete(session: requests.Session, endpoint: str) -> None:
 
 
 def parse_and_execute_task(
-    task_prompt: str, session: requests.Session, files: list[str] | None
+    task_prompt: str,
+    session: requests.Session,
+    files: list[str] | None,
 ) -> None:
     """Parse the task prompt and execute the appropriate Tripletex API calls.
 
@@ -82,7 +86,7 @@ def parse_and_execute_task(
     raise NotImplementedError("Implement task parsing and execution logic")
 
 
-@app.post("/solve", response_model=SolveResponse)
+@app.post("/solve")
 async def solve(request: SolveRequest) -> SolveResponse:
     """Main endpoint called by the competition platform."""
     session = get_tripletex_session(request.base_url, request.session_token)

@@ -16,17 +16,22 @@ Creates a YOLO dataset structure:
 
 import argparse
 import json
+import logging
 import random
 from collections import defaultdict
 from pathlib import Path
 
 from norgesgruppen.data.load import COCO_DIR
 
+LOGGER = logging.getLogger(__name__)
+
 YOLO_DIR = Path(__file__).parent / "yolo"
 
 
 def coco_to_yolo_bbox(
-    bbox: list[float], img_w: int, img_h: int
+    bbox: list[float],
+    img_w: int,
+    img_h: int,
 ) -> tuple[float, float, float, float]:
     """Convert COCO bbox [x, y, w, h] (pixels) to YOLO [cx, cy, w, h] (normalized)."""
     x, y, w, h = bbox
@@ -60,7 +65,7 @@ def convert_coco_to_yolo(
     annotations_path = COCO_DIR / "annotations.json"
     images_dir = COCO_DIR / "images"
 
-    with open(annotations_path) as f:
+    with annotations_path.open() as f:
         coco = json.load(f)
 
     # Build lookups
@@ -110,10 +115,7 @@ def convert_coco_to_yolo(
         lines = []
         for ann in annotations_by_image.get(img_id, []):
             cx, cy, nw, nh = coco_to_yolo_bbox(ann["bbox"], img_w, img_h)
-            if single_class:
-                cls_idx = 0
-            else:
-                cls_idx = cat_id_to_idx.get(ann["category_id"], 0)
+            cls_idx = 0 if single_class else cat_id_to_idx.get(ann["category_id"], 0)
             lines.append(f"{cls_idx} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
 
         label_path.write_text("\n".join(lines) + "\n" if lines else "")
@@ -129,11 +131,13 @@ def convert_coco_to_yolo(
     )
     yaml_path.write_text(yaml_content)
 
-    print(f"YOLO dataset created at {YOLO_DIR}")
-    print(f"  Train: {len(train_ids)} images")
-    print(f"  Val:   {len(val_ids)} images")
-    print(
-        f"  Classes: {num_classes} ({'single-class' if single_class else 'multi-class'})"
+    LOGGER.info("YOLO dataset created at %s", YOLO_DIR)
+    LOGGER.info("  Train: %d images", len(train_ids))
+    LOGGER.info("  Val:   %d images", len(val_ids))
+    LOGGER.info(
+        "  Classes: %d (%s)",
+        num_classes,
+        "single-class" if single_class else "multi-class",
     )
 
     return yaml_path
@@ -142,10 +146,15 @@ def convert_coco_to_yolo(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert COCO to YOLO format")
     parser.add_argument(
-        "--single-class", action="store_true", help="Detection-only (all class 0)"
+        "--single-class",
+        action="store_true",
+        help="Detection-only (all class 0)",
     )
     parser.add_argument(
-        "--val-fraction", type=float, default=0.15, help="Validation split fraction"
+        "--val-fraction",
+        type=float,
+        default=0.15,
+        help="Validation split fraction",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for split")
     args = parser.parse_args()

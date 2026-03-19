@@ -13,10 +13,13 @@ IMPORTANT sandbox constraints:
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import torch
 from ultralytics import YOLO
+
+LOGGER = logging.getLogger(__name__)
 
 # Confidence and NMS thresholds -- tune these on validation set
 CONF_THRESHOLD = 0.25
@@ -31,7 +34,7 @@ def load_model(weights_dir: Path) -> YOLO:
     for name in ["best.pt", "model.pt", "best.onnx", "model.onnx"]:
         weights_path = weights_dir / name
         if weights_path.exists():
-            print(f"Loading model from {weights_path}")
+            LOGGER.info("Loading model from %s", weights_path)
             model = YOLO(str(weights_path))
             model.fuse()
             return model
@@ -68,7 +71,7 @@ def predict_image(model: YOLO, image_path: Path) -> list[dict]:
                     "bbox": [float(x1), float(y1), w, h],
                     "category_id": int(boxes.cls[i].cpu().item()),
                     "score": float(boxes.conf[i].cpu().item()),
-                }
+                },
             )
 
     return detections
@@ -83,7 +86,7 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
 
     # Get all test images
     image_paths = sorted(images_dir.glob("img_*.jpg"))
-    print(f"Found {len(image_paths)} images")
+    LOGGER.info("Found %d images", len(image_paths))
 
     all_detections = []
 
@@ -93,33 +96,44 @@ def run_inference(images_dir: Path, output_path: Path) -> None:
 
             detections = predict_image(model, img_path)
 
-            for det in detections:
-                all_detections.append(
+            all_detections.extend(
+                [
                     {
                         "image_id": image_id,
                         "bbox": det["bbox"],
                         "category_id": det["category_id"],
                         "score": det["score"],
                     }
-                )
+                    for det in detections
+                ],
+            )
 
             if (idx + 1) % 10 == 0:
-                print(
-                    f"  Processed {idx + 1}/{len(image_paths)} images "
-                    f"({len(all_detections)} detections so far)"
+                LOGGER.info(
+                    "  Processed %d/%d images (%d detections so far)",
+                    idx + 1,
+                    len(image_paths),
+                    len(all_detections),
                 )
 
     # Write output
-    with open(output_path, "w") as f:
+    with output_path.open("w") as f:
         json.dump(all_detections, f)
 
-    print(f"Done: {len(all_detections)} detections from {len(image_paths)} images")
+    LOGGER.info(
+        "Done: %d detections from %d images",
+        len(all_detections),
+        len(image_paths),
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grocery product detection")
     parser.add_argument(
-        "--images", type=Path, required=True, help="Input images directory"
+        "--images",
+        type=Path,
+        required=True,
+        help="Input images directory",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output JSON path")
     args = parser.parse_args()

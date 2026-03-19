@@ -7,19 +7,20 @@ Strategy:
 4. Predict final terrain probability distributions
 
 Usage:
-    python -m nmai.tasks.astar_island.predict --token YOUR_TOKEN --round-id 1
+    python -m astar_island.predict --token YOUR_TOKEN --round-id 1
 """
 
 import argparse
+import logging
 
 import numpy as np
 from numpy.typing import NDArray
 
-from astar_island.client import (
-    AstarIslandClient,
-    MAP_SIZE,
-    NUM_CLASSES,
-)
+from astar_island.client import MAP_SIZE
+from astar_island.client import NUM_CLASSES
+from astar_island.client import AstarIslandClient
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_uniform_prior() -> NDArray[np.float64]:
@@ -29,7 +30,8 @@ def create_uniform_prior() -> NDArray[np.float64]:
 
 
 def ensure_min_probability(
-    predictions: NDArray[np.float64], min_prob: float = 0.01
+    predictions: NDArray[np.float64],
+    min_prob: float = 0.01,
 ) -> NDArray[np.float64]:
     """Ensure no probability is exactly 0.0 (critical for KL divergence scoring).
 
@@ -87,7 +89,7 @@ def run_prediction_pipeline(client: AstarIslandClient, round_id: int) -> None:
     # 1. Get round info
     _round_data = client.get_round(round_id)
     budget = client.get_budget()
-    print(f"Round {round_id}: budget remaining = {budget}")
+    LOGGER.info("Round %d: budget remaining = %d", round_id, budget)
 
     # 2. Start with uniform prior
     predictions = create_uniform_prior()
@@ -110,7 +112,7 @@ def run_prediction_pipeline(client: AstarIslandClient, round_id: int) -> None:
 
     # 7. Submit
     result = client.submit(round_id=round_id, predictions=predictions)
-    print(f"Submission result: {result}")
+    LOGGER.info("Submission result: %s", result)
 
 
 def main() -> None:

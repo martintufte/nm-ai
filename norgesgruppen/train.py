@@ -6,25 +6,29 @@ Two-stage approach:
 
 Usage:
     # Step 1: Convert data to YOLO format
-    python -m nmai.tasks.norgesgruppen.data.convert --single-class
+    python -m norgesgruppen.data.convert --single-class
 
     # Step 2: Train detection-only baseline
-    python -m nmai.tasks.norgesgruppen.train --mode detect
+    python -m norgesgruppen.train --mode detect
 
     # Step 3: Convert data with all classes
-    python -m nmai.tasks.norgesgruppen.data.convert
+    python -m norgesgruppen.data.convert
 
     # Step 4: Train multi-class model
-    python -m nmai.tasks.norgesgruppen.train --mode classify
+    python -m norgesgruppen.train --mode classify
 
     # Step 5: Export best weights
-    python -m nmai.tasks.norgesgruppen.train --mode export
+    python -m norgesgruppen.train --mode export
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 from ultralytics import YOLO
+
+LOGGER = logging.getLogger(__name__)
+
 
 YOLO_DATA = Path(__file__).parent / "data" / "yolo" / "dataset.yaml"
 RUNS_DIR = Path(__file__).parent / "runs"
@@ -73,7 +77,7 @@ def train_detection(
     )
 
     best_path = RUNS_DIR / "detect" / "weights" / "best.pt"
-    print(f"Best weights: {best_path}")
+    LOGGER.info("Best weights: %s", best_path)
     return best_path
 
 
@@ -90,7 +94,7 @@ def train_classification(
     Can optionally start from a pretrained detection model.
     """
     if pretrained_detect and pretrained_detect.exists():
-        print(f"Starting from pretrained: {pretrained_detect}")
+        LOGGER.info("Starting from pretrained: %s", pretrained_detect)
         model = YOLO(str(pretrained_detect))
     else:
         model_name = f"yolov8{model_size}.pt"
@@ -121,7 +125,7 @@ def train_classification(
     )
 
     best_path = RUNS_DIR / "classify" / "weights" / "best.pt"
-    print(f"Best weights: {best_path}")
+    LOGGER.info("Best weights: %s", best_path)
     return best_path
 
 
@@ -132,7 +136,7 @@ def export_model(weights_path: Path, format: str = "torchscript") -> Path:
     """
     model = YOLO(str(weights_path))
     export_path = model.export(format=format, half=True, imgsz=1280)
-    print(f"Exported: {export_path}")
+    LOGGER.info("Exported: %s", export_path)
     return Path(export_path)
 
 
@@ -140,14 +144,16 @@ def evaluate(weights_path: Path) -> None:
     """Run validation on the val split."""
     model = YOLO(str(weights_path))
     metrics = model.val(data=str(YOLO_DATA), imgsz=1280, plots=True)
-    print(f"mAP50:    {metrics.box.map50:.4f}")
-    print(f"mAP50-95: {metrics.box.map:.4f}")
+    LOGGER.info("mAP50:    %.4f", metrics.box.map50)
+    LOGGER.info("mAP50-95: %.4f", metrics.box.map)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Norgesgruppen detection model")
     parser.add_argument(
-        "--mode", choices=["detect", "classify", "export", "eval"], required=True
+        "--mode",
+        choices=["detect", "classify", "export", "eval"],
+        required=True,
     )
     parser.add_argument("--model-size", default="m", choices=["n", "s", "m", "l", "x"])
     parser.add_argument("--epochs", type=int, default=50)
