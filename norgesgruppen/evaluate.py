@@ -14,6 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
+from norgesgruppen.run_utils import create_run_dir
+from norgesgruppen.run_utils import get_run_root
+from norgesgruppen.run_utils import resolve_run_dir_from_predictions
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -106,11 +110,7 @@ def evaluate_map(
         total_gt = 0
         gt_matched: dict[str, list[bool]] = {}
         for img_id, gt_anns in gt_by_image.items():
-            cat_gt = (
-                gt_anns
-                if ignore_class
-                else [a for a in gt_anns if a["category_id"] == cat]
-            )
+            cat_gt = gt_anns if ignore_class else [a for a in gt_anns if a["category_id"] == cat]
             total_gt += len(cat_gt)
             gt_matched[img_id] = [False] * len(cat_gt)
 
@@ -122,11 +122,7 @@ def evaluate_map(
         for pred in cat_preds:
             img_id = pred["image_id"]
             gt_anns = gt_by_image.get(img_id, [])
-            cat_gt = (
-                gt_anns
-                if ignore_class
-                else [a for a in gt_anns if a["category_id"] == cat]
-            )
+            cat_gt = gt_anns if ignore_class else [a for a in gt_anns if a["category_id"] == cat]
 
             best_iou = 0.0
             best_idx = -1
@@ -139,9 +135,7 @@ def evaluate_map(
             matched_flags = gt_matched.get(img_id, [])
             # Filter to only category-specific indices
             if not ignore_class:
-                cat_indices = [
-                    i for i, a in enumerate(gt_anns) if a["category_id"] == cat
-                ]
+                cat_indices = [i for i, a in enumerate(gt_anns) if a["category_id"] == cat]
                 if best_idx >= 0 and best_idx < len(cat_indices):
                     global_idx = cat_indices[best_idx]
                 else:
@@ -149,11 +143,7 @@ def evaluate_map(
             else:
                 global_idx = best_idx
 
-            if (
-                best_iou >= iou_threshold
-                and global_idx >= 0
-                and not matched_flags[best_idx]
-            ):
+            if best_iou >= iou_threshold and global_idx >= 0 and not matched_flags[best_idx]:
                 tp_list.append(1)
                 matched_flags[best_idx] = True
             else:
@@ -191,6 +181,23 @@ def evaluate(predictions_path: Path, annotations_path: Path) -> None:
     LOGGER.info("Detection mAP@0.5:       %.4f  (weight: 70%%)", detection_map)
     LOGGER.info("Classification mAP@0.5:  %.4f  (weight: 30%%)", classification_map)
     LOGGER.info("Final score:             %.4f", final_score)
+
+    run_dir = resolve_run_dir_from_predictions(predictions_path)
+    if run_dir is None:
+        run_dir = create_run_dir("eval")
+
+    score_payload = {
+        "predictions": str(predictions_path),
+        "annotations": str(annotations_path),
+        "detection_map": detection_map,
+        "classification_map": classification_map,
+        "final_score": final_score,
+    }
+    (run_dir / "score.json").write_text(json.dumps(score_payload, indent=2))
+
+    scores_path = get_run_root() / "scores.txt"
+    with scores_path.open("a") as f:
+        f.write(f"{final_score:.6f}\t{run_dir.name}\n")
 
 
 def main() -> None:
