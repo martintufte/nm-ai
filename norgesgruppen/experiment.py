@@ -358,46 +358,155 @@ def _iou(box1: list[float], box2: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def run_eval_only(
+    weights: str,
+    name: str | None = None,
+    imgsz: int = 1280,
+    max_detections: int = 300,
+    multi_class: bool = False,
+    val_fraction: float = 0.15,
+    seed: int = 42,
+) -> Path:
+    """Run inference + threshold sweep on an existing weights file (no training)."""
+    weights_path = Path(weights)
+    if not weights_path.exists():
+        # Check weights/ dir
+        weights_path = WEIGHTS_DIR / weights
+    if not weights_path.exists():
+        msg = f"Weights not found: {weights}"
+        raise FileNotFoundError(msg)
+
+    if name is None:
+        name = f"eval_{weights_path.stem}"
+
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+    exp_dir = EXPERIMENTS_DIR / f"{timestamp}_{name}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    config = {
+        "name": name,
+        "timestamp": timestamp,
+        "weights": str(weights_path),
+        "imgsz": imgsz,
+        "max_detections": max_detections,
+        "multi_class": multi_class,
+        "mode": "eval_only",
+    }
+    (exp_dir / "config.json").write_text(json.dumps(config, indent=2))
+    LOGGER.info("Eval-only: %s", exp_dir.name)
+    LOGGER.info("Weights:   %s", weights_path)
+
+    single_class = not multi_class
+    dataset_yaml = convert_coco_to_yolo(
+        val_fraction=val_fraction,
+        single_class=single_class,
+        seed=seed,
+    )
+
+    sweep_results = run_inference_and_sweep(
+        weights_path=weights_path,
+        annotations_path=ANNOTATIONS_PATH,
+        dataset_yaml=dataset_yaml,
+        max_detections=max_detections,
+        imgsz=imgsz,
+        exp_dir=exp_dir,
+    )
+
+    results = {**config, "best_settings": sweep_results["best"], "sweep": sweep_results["sweep"]}
+    (exp_dir / "results.json").write_text(json.dumps(results, indent=2))
+
+    best = sweep_results["best"]
+    leaderboard_path = EXPERIMENTS_DIR / "leaderboard.txt"
+    with leaderboard_path.open("a") as f:
+        f.write(
+            f"{best['final_score']:.6f}\t"
+            f"det={best['detection_map']:.4f}\t"
+            f"cls={best['classification_map']:.4f}\t"
+            f"conf={best['conf']}\t"
+            f"iou={best['iou']}\t"
+            f"{exp_dir.name}\n",
+        )
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("RESULTS: %s", exp_dir.name)
+    LOGGER.info("  Best conf=%.2f  iou=%.2f", best["conf"], best["iou"])
+    LOGGER.info("  Detection mAP@0.5:      %.4f (70%%)", best["detection_map"])
+    LOGGER.info("  Classification mAP@0.5: %.4f (30%%)", best["classification_map"])
+    LOGGER.info("  Final score:            %.4f", best["final_score"])
+    LOGGER.info("=" * 60)
+
+    return exp_dir
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run detection experiment")
-    parser.add_argument("--name", required=True, help="Experiment name")
-    parser.add_argument("--model-size", default="m", choices=["n", "s", "m", "l", "x"])
-    parser.add_argument(
+    sub = parser.add_subparsers(dest="command")
+
+    # --- train (default when no subcommand) ---
+    train_p = sub.add_parser("train", help="Train + evaluate")
+    train_p.add_argument("--name", required=True, help="Experiment name")
+    train_p.add_argument("--model-size", default="m", choices=["n", "s", "m", "l", "x"])
+    train_p.add_argument(
         "--model-variant",
         default="yolov8",
         help="Model variant (yolov8, yolo11, etc.)",
     )
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--imgsz", type=int, default=1280)
-    parser.add_argument("--batch", type=int, default=-1, help="Batch size (-1 for auto)")
-    parser.add_argument("--multi-class", action="store_true", help="Train with all 356 classes")
-    parser.add_argument("--pretrained-weights", type=str, help="Path to pretrained weights")
-    parser.add_argument("--lr0", type=float, default=0.001)
-    parser.add_argument("--mosaic", type=float, default=0.5)
-    parser.add_argument("--mixup", type=float, default=0.1)
-    parser.add_argument("--optimizer", default="AdamW")
-    parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--val-fraction", type=float, default=0.15)
-    parser.add_argument("--seed", type=int, default=42)
+    train_p.add_argument("--epochs", type=int, default=50)
+    train_p.add_argument("--imgsz", type=int, default=1280)
+    train_p.add_argument("--batch", type=int, default=-1, help="Batch size (-1 for auto)")
+    train_p.add_argument("--multi-class", action="store_true", help="Train with all 356 classes")
+    train_p.add_argument("--pretrained-weights", type=str, help="Path to pretrained weights")
+    train_p.add_argument("--lr0", type=float, default=0.001)
+    train_p.add_argument("--mosaic", type=float, default=0.5)
+    train_p.add_argument("--mixup", type=float, default=0.1)
+    train_p.add_argument("--optimizer", default="AdamW")
+    train_p.add_argument("--patience", type=int, default=20)
+    train_p.add_argument("--val-fraction", type=float, default=0.15)
+    train_p.add_argument("--seed", type=int, default=42)
+
+    # --- eval (inference only) ---
+    eval_p = sub.add_parser("eval", help="Run inference + threshold sweep on existing weights")
+    eval_p.add_argument(
+        "--weights", required=True, help="Path to .pt weights (or name in weights/)"
+    )
+    eval_p.add_argument("--name", help="Experiment name (default: eval_<weights_stem>)")
+    eval_p.add_argument("--imgsz", type=int, default=1280)
+    eval_p.add_argument("--multi-class", action="store_true")
+    eval_p.add_argument("--val-fraction", type=float, default=0.15)
+    eval_p.add_argument("--seed", type=int, default=42)
+
     args = parser.parse_args()
 
-    run_experiment(
-        name=args.name,
-        model_size=args.model_size,
-        model_variant=args.model_variant,
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
-        multi_class=args.multi_class,
-        pretrained_weights=args.pretrained_weights,
-        lr0=args.lr0,
-        mosaic=args.mosaic,
-        mixup=args.mixup,
-        optimizer=args.optimizer,
-        patience=args.patience,
-        val_fraction=args.val_fraction,
-        seed=args.seed,
-    )
+    if args.command == "eval":
+        run_eval_only(
+            weights=args.weights,
+            name=args.name,
+            imgsz=args.imgsz,
+            multi_class=args.multi_class,
+            val_fraction=args.val_fraction,
+            seed=args.seed,
+        )
+    else:
+        # Default to train (also handles explicit "train" subcommand)
+        if not hasattr(args, "name") or args.name is None:
+            parser.error("train requires --name")
+        run_experiment(
+            name=args.name,
+            model_size=args.model_size,
+            model_variant=args.model_variant,
+            epochs=args.epochs,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            multi_class=args.multi_class,
+            pretrained_weights=args.pretrained_weights,
+            lr0=args.lr0,
+            mosaic=args.mosaic,
+            mixup=args.mixup,
+            optimizer=args.optimizer,
+            patience=args.patience,
+            val_fraction=args.val_fraction,
+            seed=args.seed,
+        )
 
 
 if __name__ == "__main__":
