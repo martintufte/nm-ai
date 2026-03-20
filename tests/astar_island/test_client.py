@@ -1,5 +1,7 @@
 """Unit tests for the Astar Island API client."""
 
+import json
+
 import numpy as np
 import pytest
 import responses
@@ -19,7 +21,7 @@ def client() -> AstarIslandClient:
 class TestGetRounds:
     @responses.activate
     def test_returns_rounds(self, client: AstarIslandClient) -> None:
-        payload = {"rounds": [{"id": 1, "status": "active"}]}
+        payload = {"rounds": [{"id": "abc-123", "status": "active"}]}
         responses.get(f"{BASE_URL}/rounds", json=payload, status=200)
 
         result = client.get_rounds()
@@ -37,19 +39,19 @@ class TestGetRounds:
 class TestGetRound:
     @responses.activate
     def test_returns_round_details(self, client: AstarIslandClient) -> None:
-        payload = {"id": 1, "initial_maps": [[0, 5, 1]]}
-        responses.get(f"{BASE_URL}/rounds/1", json=payload, status=200)
+        payload = {"id": "abc-123", "initial_states": [{"grid": [[0, 5, 1]]}]}
+        responses.get(f"{BASE_URL}/rounds/abc-123", json=payload, status=200)
 
-        result = client.get_round(round_id=1)
+        result = client.get_round(round_id="abc-123")
 
         assert result == payload
 
     @responses.activate
     def test_raises_on_404(self, client: AstarIslandClient) -> None:
-        responses.get(f"{BASE_URL}/rounds/999", json={"error": "not found"}, status=404)
+        responses.get(f"{BASE_URL}/rounds/bad-id", json={"error": "not found"}, status=404)
 
         with pytest.raises(HTTPError):
-            client.get_round(round_id=999)
+            client.get_round(round_id="bad-id")
 
 
 class TestGetBudget:
@@ -73,7 +75,7 @@ class TestSimulate:
         }
         responses.post(f"{BASE_URL}/simulate", json=payload, status=200)
 
-        result = client.simulate(round_id=1, seed_index=0, x=5, y=5)
+        result = client.simulate(round_id="abc-123", seed_index=0, x=5, y=5)
 
         assert result == payload
 
@@ -81,20 +83,19 @@ class TestSimulate:
     def test_sends_correct_body(self, client: AstarIslandClient) -> None:
         responses.post(f"{BASE_URL}/simulate", json={}, status=200)
 
-        client.simulate(round_id=2, seed_index=3, x=10, y=20)
+        client.simulate(round_id="abc-123", seed_index=3, x=10, y=20)
 
-        assert responses.calls[0].request.body is not None
-        import json
-
-        body = json.loads(responses.calls[0].request.body)
-        assert body == {"round_id": 2, "seed_index": 3, "x": 10, "y": 20}
+        request_body = responses.calls[0].request.body
+        assert request_body is not None
+        body = json.loads(request_body)
+        assert body == {"round_id": "abc-123", "seed_index": 3, "x": 10, "y": 20}
 
     @responses.activate
     def test_raises_on_budget_exceeded(self, client: AstarIslandClient) -> None:
         responses.post(f"{BASE_URL}/simulate", json={"error": "budget exceeded"}, status=429)
 
         with pytest.raises(HTTPError):
-            client.simulate(round_id=1, seed_index=0, x=0, y=0)
+            client.simulate(round_id="abc-123", seed_index=0, x=0, y=0)
 
 
 class TestSubmit:
@@ -104,7 +105,7 @@ class TestSubmit:
         responses.post(f"{BASE_URL}/submit", json=payload, status=200)
 
         predictions = np.ones((MAP_SIZE, MAP_SIZE, NUM_CLASSES)) / NUM_CLASSES
-        result = client.submit(round_id=1, predictions=predictions)
+        result = client.submit(round_id="abc-123", predictions=predictions)
 
         assert result == payload
 
@@ -113,12 +114,12 @@ class TestSubmit:
         responses.post(f"{BASE_URL}/submit", json={}, status=200)
 
         predictions = np.ones((MAP_SIZE, MAP_SIZE, NUM_CLASSES)) / NUM_CLASSES
-        client.submit(round_id=1, predictions=predictions)
+        client.submit(round_id="abc-123", predictions=predictions)
 
-        import json
-
-        body = json.loads(responses.calls[0].request.body)
-        assert body["round_id"] == 1
+        request_body = responses.calls[0].request.body
+        assert request_body is not None
+        body = json.loads(request_body)
+        assert body["round_id"] == "abc-123"
         assert len(body["predictions"]) == MAP_SIZE
         assert len(body["predictions"][0]) == MAP_SIZE
         assert len(body["predictions"][0][0]) == NUM_CLASSES
@@ -127,13 +128,13 @@ class TestSubmit:
         bad_predictions = np.ones((10, 10, 6))
 
         with pytest.raises(AssertionError):
-            client.submit(round_id=1, predictions=bad_predictions)
+            client.submit(round_id="abc-123", predictions=bad_predictions)
 
 
 class TestGetMyRounds:
     @responses.activate
     def test_returns_my_rounds(self, client: AstarIslandClient) -> None:
-        payload = {"rounds": [{"id": 1, "score": 72.0}]}
+        payload = {"rounds": [{"id": "abc-123", "score": 72.0}]}
         responses.get(f"{BASE_URL}/my-rounds", json=payload, status=200)
 
         result = client.get_my_rounds()
@@ -145,9 +146,9 @@ class TestGetMyPredictions:
     @responses.activate
     def test_returns_predictions(self, client: AstarIslandClient) -> None:
         payload = {"predictions": [[[0.16] * 6] * 40] * 40}
-        responses.get(f"{BASE_URL}/my-predictions/1", json=payload, status=200)
+        responses.get(f"{BASE_URL}/my-predictions/abc-123", json=payload, status=200)
 
-        result = client.get_my_predictions(round_id=1)
+        result = client.get_my_predictions(round_id="abc-123")
 
         assert result == payload
 
@@ -156,9 +157,9 @@ class TestGetAnalysis:
     @responses.activate
     def test_returns_analysis(self, client: AstarIslandClient) -> None:
         payload = {"ground_truth": [[0] * 40] * 40, "score": 90.0}
-        responses.get(f"{BASE_URL}/analysis/1/0", json=payload, status=200)
+        responses.get(f"{BASE_URL}/analysis/abc-123/0", json=payload, status=200)
 
-        result = client.get_analysis(round_id=1, seed_index=0)
+        result = client.get_analysis(round_id="abc-123", seed_index=0)
 
         assert result == payload
 
@@ -181,4 +182,6 @@ class TestAuthHeader:
 
         client.get_rounds()
 
-        assert responses.calls[0].request.headers["Authorization"] == "Bearer test-token"
+        headers = responses.calls[0].request.headers
+        assert headers is not None
+        assert headers["Authorization"] == "Bearer test-token"
