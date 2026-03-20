@@ -91,10 +91,14 @@ MAX_RESPONSE_CHARS = 20_000  # Truncate large API responses
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
-class SolveRequest(BaseModel):
-    task_prompt: str
-    session_token: str
+class TripletexCredentials(BaseModel):
     base_url: str
+    session_token: str
+
+
+class SolveRequest(BaseModel):
+    prompt: str
+    tripletex_credentials: TripletexCredentials
     files: list[str] | None = None  # Optional base64-encoded PDFs/images
 
 
@@ -325,20 +329,21 @@ async def solve(request: SolveRequest) -> SolveResponse:
     file_sizes = (
         [len(f) for f in request.files] if request.files else []
     )
+    creds = request.tripletex_credentials
     logger.info(
         "POST /solve — base_url=%s files=%d file_sizes=%s prompt_length=%d",
-        request.base_url,
+        creds.base_url,
         file_count,
         file_sizes,
-        len(request.task_prompt),
+        len(request.prompt),
     )
-    logger.info("Task prompt:\n%s", request.task_prompt)
+    logger.info("Task prompt:\n%s", request.prompt)
     if request.files:
         for i, f in enumerate(request.files):
             media = _detect_media_type(f)
             logger.info("  File %d: %s, %d chars base64", i, media, len(f))
 
-    session = get_tripletex_session(request.base_url, request.session_token)
+    session = get_tripletex_session(creds.base_url, creds.session_token)
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.warning("ANTHROPIC_API_KEY is not set, skipping LLM agent loop")
@@ -346,7 +351,7 @@ async def solve(request: SolveRequest) -> SolveResponse:
 
     await asyncio.to_thread(
         parse_and_execute_task,
-        task_prompt=request.task_prompt,
+        task_prompt=request.prompt,
         session=session,
         files=request.files,
     )
