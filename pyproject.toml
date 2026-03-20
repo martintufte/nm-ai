@@ -8,17 +8,19 @@ requires-python = ">=3.13"
 dependencies = [
     "anthropic>=0.86.0",
     "fastapi>=0.135.1",
-    "numpy>=2.4.3",
-    "pillow>=12.1.1",
     "pydantic>=2.12.5",
     "requests>=2.32.5",
-    "torch>=2.10.0",
-    "torchvision>=0.25.0",
-    "ultralytics>=8.4.24",
     "uvicorn>=0.42.0",
 ]
 
 [dependency-groups]
+detection = [
+    "numpy>=2.4.3",
+    "pillow>=12.1.1",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "ultralytics>=8.4.24",
+]
 dev = [
     "pre-commit>=4.5.1",
     "ty>=0.0.24",
