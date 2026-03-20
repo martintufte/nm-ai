@@ -5,6 +5,10 @@ data/yolo/
 
 # Training runs
 runs/
+experiments/
+
+# Pretrained weights
+*.pt
 
 # Submission artifacts
 submission.zip

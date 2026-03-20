@@ -62,8 +62,8 @@ def convert_coco_to_yolo(
     Returns:
         Path to generated dataset.yaml
     """
-    annotations_path = COCO_DIR / "annotations.json"
-    images_dir = COCO_DIR / "images"
+    annotations_path = COCO_DIR / "train" / "annotations.json"
+    images_dir = COCO_DIR / "train" / "images"
 
     with annotations_path.open() as f:
         coco = json.load(f)
