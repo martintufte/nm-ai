@@ -110,12 +110,13 @@ venv/
 
 # Norgesgruppen
 # Training data (download separately)
-norgesgruppen/data/coco/
-norgesgruppen/data/product_references/
+norgesgruppen/data/NM_NGD_coco_dataset/
+norgesgruppen/data/NM_NGD_product_images/
 norgesgruppen/data/yolo/
 
 # Training runs
 norgesgruppen/experiments/
+norgesgruppen/weights/
 
 # Pretrained weights
 norgesgruppen/*.pt
