@@ -12,6 +12,7 @@ import binascii
 import json
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass
 from dataclasses import field
@@ -130,7 +131,9 @@ This tool is free and does not count toward your efficiency score.
 | invoice | Invoice + Orders + OrderLines, payment/credit note (query params), bank account prereq |
 | ledger | Ledger accounts, postings, vouchers, VAT codes, currency |
 | product | Product CRUD, VAT gotcha, unique names |
-| project | Project CRUD, projectManager, inline participants/activities |
+| project | Project CRUD, projectManager, inline participants/activities, hourly rates |
+| activity | Activity CRUD, activityType, linking to projects |
+| timesheet | Timesheet entry (hours registration), allocated hours, month/week approval |
 | travel | Travel expenses, costs, mileage, per diem, accommodation, rate categories |"""
 
 _FULL_SYSTEM_PROMPT = "\n\n".join(
@@ -230,6 +233,12 @@ def get_tripletex_client(base_url: str, session_token: str) -> httpx.Client:
         base_url=base_url,
         auth=("0", session_token),
         headers={"Content-Type": "application/json"},
+        timeout=httpx.Timeout(
+            connect=5.0,
+            read=30.0,
+            write=10.0,
+            pool=5.0,
+        ),
     )
 
 
@@ -254,9 +263,48 @@ def _normalize_endpoint(endpoint: str) -> str:
     return endpoint
 
 
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0  # seconds
+
+
+def _retry_request(fn, *args, **kwargs):
+    """Execute an HTTP request with retry on transient connection/timeout failures.
+
+    Retries on connection errors and timeouts only (NOT HTTP status errors).
+    Uses exponential backoff with jitter.
+    """
+    last_exc = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = fn(*args, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            last_exc = e
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Connection error on attempt %d (%s), retrying in %.1fs",
+                    attempt + 1, type(e).__name__, delay,
+                )
+                time.sleep(delay)
+            else:
+                raise
+    raise last_exc  # unreachable, but satisfies type checkers
+
+
 # ---------------------------------------------------------------------------
 # Tool factory — returns @beta_tool-decorated closures bound to a session
 # ---------------------------------------------------------------------------
+# Known param name gotchas — the API silently ignores wrong names.
+# Keys are exact endpoint paths (not prefixes) to avoid false positives.
+# e.g. "customer" matches GET /customer but NOT GET /customer/category
+# (customer/category legitimately uses `name` as a query param).
+_PARAM_FIXES: dict[str, dict[str, str]] = {
+    "customer": {"name": "customerName"},
+}
+
+
 def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionTool]:
     """Create Tripletex API tools bound to the given httpx client and call tracker."""
 
@@ -269,10 +317,18 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
             params: Optional query parameters as key-value pairs.
         """
         path = _normalize_endpoint(endpoint)
+
+        if params:
+            fixes = _PARAM_FIXES.get(path, {})
+            for wrong, correct in fixes.items():
+                if wrong in params:
+                    raise ToolError(
+                        f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead."
+                    )
+
         logger.info("GET %s params=%s", path, params)
         try:
-            resp = client.get(path, params=params)
-            resp.raise_for_status()
+            resp = _retry_request(client.get, path, params=params)
         except httpx.HTTPStatusError as e:
             tracker.record("GET", path, e.response.status_code, params=params)
             logger.warning(
@@ -296,8 +352,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         path = _normalize_endpoint(endpoint)
         logger.info("POST %s data=%s", path, json.dumps(data)[:500])
         try:
-            resp = client.post(path, json=data)
-            resp.raise_for_status()
+            resp = _retry_request(client.post, path, json=data)
         except httpx.HTTPStatusError as e:
             tracker.record("POST", path, e.response.status_code, data=data)
             logger.warning(
@@ -321,8 +376,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         path = _normalize_endpoint(endpoint)
         logger.info("PUT %s data=%s", path, json.dumps(data)[:500])
         try:
-            resp = client.put(path, json=data)
-            resp.raise_for_status()
+            resp = _retry_request(client.put, path, json=data)
         except httpx.HTTPStatusError as e:
             tracker.record("PUT", path, e.response.status_code, data=data)
             logger.warning(
@@ -345,8 +399,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         path = _normalize_endpoint(endpoint)
         logger.info("DELETE %s", path)
         try:
-            resp = client.delete(path)
-            resp.raise_for_status()
+            resp = _retry_request(client.delete, path)
         except httpx.HTTPStatusError as e:
             tracker.record("DELETE", path, e.response.status_code)
             logger.warning(

@@ -9,7 +9,7 @@ None — department can be created from scratch.
 |-------|-----------|-------|
 | `name` | Yes | Sufficient alone for creation |
 
-Optional fields: `departmentNumber` (auto-assigned if omitted), `departmentManager` (Employee ref), `isInactive`.
+Optional fields: `departmentNumber` (defaults to empty string if omitted — set explicitly if needed), `departmentManager` (Employee ref), `isInactive`.
 
 ## Call-saving Patterns
 

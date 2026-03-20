@@ -3,7 +3,6 @@
 ## Dependencies
 - **Customer** must exist
 - **Product** must exist (for order lines)
-- **Company bank account number** must be set (one-time setup). Error without it: "Faktura kan ikke opprettes før selskapet har registrert et bankkontonummer."
 
 ## Required Fields — POST /invoice
 
@@ -43,15 +42,7 @@ Optional order line fields: `description`, `unitCostCurrency` (number), `unitPri
 - **Inline everything in one POST**: Invoice → Orders → OrderLines can all be created in a single `POST /invoice` call. This is the preferred approach — 1 call instead of 3+.
 - **POST returns full object** with `id`, `version`, and all nested IDs. Use for subsequent payment/credit note calls.
 - **Customer/product IDs from prior creates**: if you just created the customer or product, reuse those IDs directly.
-- **Bank account setup**: only needed once per company. If you know the bank account was already set, skip this step.
-
-## One-time Setup: Bank Account Number
-See ledger skill for full Account API. Quick version:
-```
-GET /ledger/account?isBankAccount=true&count=20
-PUT /ledger/account/{BANK_ACCOUNT_ID}
-{"id": BANK_ACCOUNT_ID, "version": V, "bankAccountNumber": "12345678903"}
-```
+- **Minimum total: 2-4 calls** for a full invoice workflow (customer + product + invoice + payment). Customer/product can be skipped if they already exist.
 
 ## Minimum Payload — Full Invoice (1 call)
 ```json
@@ -90,6 +81,14 @@ PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD&comment=reason
 
 ## Delete
 `DELETE /invoice/{id}` → **403 Forbidden**. Invoices cannot be deleted. Use credit note to void instead.
+
+## Troubleshooting: Bank Account Number
+Bank accounts are part of company setup and are already configured in typical environments. **Do not** proactively GET/PUT bank accounts. If invoice creation fails with "Faktura kan ikke opprettes før selskapet har registrert et bankkontonummer", then do the bank account setup and retry:
+```
+GET /ledger/account?isBankAccount=true&count=20
+PUT /ledger/account/{BANK_ACCOUNT_ID}
+{"id": BANK_ACCOUNT_ID, "version": V, "bankAccountNumber": "12345678903"}
+```
 
 ## Order as Standalone Entity
 

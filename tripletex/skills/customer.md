@@ -13,6 +13,8 @@ All other fields optional: `organizationNumber`, `supplierNumber` (int32), `glob
 
 ## Call-saving Patterns
 
+- **Search by name**: use `customerName` param (NOT `name`): `GET /customer?customerName=X`
+- **List GET returns full objects** with `id`, `version`, and all nested objects (including `postalAddress`). No need to re-GET by ID after finding a customer in the list.
 - **POST returns full object** with `id`, `version`, all fields, and nested object IDs (including `postalAddress.id` even for name-only creation). Cache everything — no GET needed.
 - **Address updates don't need old address IDs**: on PUT, include `postalAddress` without `id`/`version` — Tripletex creates a new address object replacing the old one. No need to GET or track address IDs.
 - If creating a customer just to use in an invoice, pass the returned `id` directly into the invoice — don't re-query.

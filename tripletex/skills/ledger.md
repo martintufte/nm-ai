@@ -70,6 +70,12 @@ POST /ledger/voucher
 - Use revenue (3xxx) and expense (6xxx+) accounts — asset accounts (1xxx) may be system-locked
 - The API auto-generates VAT postings (row=0) based on account VAT settings
 
+**Manual payroll voucher:**
+- Debit: 5000-series (salary expense, e.g. 5000 "Lønn") — total gross salary
+- Credit: 2920 or 2900-series (salary payable, e.g. 2920 "Påløpt lønn") — negative amount matching debit
+- `vatType`: `{"id": 0}` (no VAT on salary)
+- Look up account IDs via `GET /ledger/account?number=5000&count=5` and `GET /ledger/account?number=2900&count=5`
+
 ### GET /ledger/voucher
 Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(required)**, `dateTo` **(required)**
 

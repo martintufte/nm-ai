@@ -21,6 +21,8 @@ NOT raw integers. Applies to all foreign key fields: `customer`, `employee`, `de
 ```
 Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fields, but avoid it unless you are certain of the exact DTO field names — wrong names cause HTTP 400, wasting a call.
 
+**List GETs return full objects** — each item in `values[]` has `id`, `version`, and all nested objects (e.g., `postalAddress` with its own `id`). No need to re-GET by ID after finding an entity in a list response.
+
 ### Single entity (`GET /entity/{id}`)
 ```json
 {"value": { ...entity... }}
@@ -29,7 +31,7 @@ Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fie
 ### POST (create)
 Returns the full created object with `id`, `version`, and all fields. HTTP 201.
 ```json
-{"value": {"id": 12345, "version": 0, "url": "...", ...all fields...}}
+{"value": {"id": 12345, "version": 1, "url": "...", ...all fields...}}
 ```
 **Call-saving:** Always reuse `id` and `version` from POST responses — no need to GET after creating.
 
@@ -84,12 +86,20 @@ Verified inline fields:
 
 **Always prefer inline creation over separate calls when possible.**
 
+### PUT action endpoints (`:payment`, `:createCreditNote`)
+Returns the entity object. HTTP 200. Credit note returns a **new invoice object** (the credit note itself) with its own ID.
+
 ## Auto-assigned Fields
 Never set these — they're auto-generated:
-- `id`, `version`, `url`
+- `id`, `version` (starts at 1), `url`
 - `displayName` (composed from name fields)
-- `employeeNumber`, `departmentNumber`, `customerNumber` (auto-assigned if omitted)
+- `customerNumber` (auto-assigned if omitted)
 - `invoiceNumber` (sequential)
+- Travel expense `number`/`numberAsString` (e.g., "1-2026")
+
+**Not auto-assigned** (default to empty string): `employeeNumber`, `departmentNumber`. Set explicitly if needed.
+
+**Tip:** To identify inline-capable fields beyond the verified list, look for non-readOnly properties with `type: array` and `items.$ref` in the OpenAPI spec.
 
 ## Lookup Reference Data (cache per session)
 ```

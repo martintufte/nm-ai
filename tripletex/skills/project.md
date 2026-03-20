@@ -1,7 +1,7 @@
 # Project
 
 ## Dependencies
-- **Employee** must exist (as `projectManager`)
+- **Employee** must exist (as `projectManager`) — requires `AUTH_PROJECT_MANAGER` entitlement. Newly created employees do not have this entitlement regardless of `userType`.
 
 ## Required Fields — POST /project
 
@@ -9,7 +9,7 @@
 |-------|-----------|-------|
 | `name` | Yes | |
 | `projectManager` | Yes | `{"id": EMP_ID}` |
-| `isInternal` | Yes | boolean |
+| `isInternal` | Yes | boolean — `false` when linked to a customer (external), `true` for internal projects (no customer) |
 | `startDate` | **Yes (hidden)** | Not marked required in spec. Error if omitted: "Feltet må fylles ut." |
 
 Optional fields: `number` (auto-generated if NULL), `description`, `department` (Department ref), `mainProject` (Project ref), `endDate`, `customer` (Customer ref), `isClosed`, `isReadyForInvoicing`, `isOffer` (boolean — true=offer, false=project), `isFixedPrice` (boolean — true=fixed price, false=hourly rate), `projectCategory` (ProjectCategory ref), `deliveryAddress` (Address), `boligmappaAddress` (Address), `displayNameFormat` (string — name presentation in overviews), `reference`, `externalAccountsNumber`, `vatType` (VatType ref), `fixedprice` (number — in project's currency), `currency` (Currency ref), `markUpOrderLines` (number — %), `markUpFeesEarned` (number — %), `isPriceCeiling` (boolean), `priceCeilingAmount` (number), `projectHourlyRates` ([ProjectHourlyRate] inline), `participants` ([ProjectParticipant] inline), `projectActivities` ([ProjectActivity] inline), `contact` (Contact ref), `attention` (Contact ref), `invoiceComment`, `preliminaryInvoice` (Invoice ref), `generalProjectActivitiesPerProjectOnly` (boolean), `invoiceDueDate` (int32), `invoiceDueDateType` (string), `invoiceReceiverEmail`, `overdueNoticeEmail`, `accessType` (string — READ/WRITE), `forParticipantsOnly` (boolean), `useProductNetPrice` (boolean), `ignoreCompanyProductDiscountAgreement` (boolean), `invoiceOnAccountVatHigh` (boolean), `accountingDimensionValues` ([AccountingDimensionValue] — [BETA]).
@@ -20,6 +20,7 @@ Optional fields: `number` (auto-generated if NULL), `description`, `department` 
 - **Inline participants**: include `"participants": [{"employee": {"id": X}}]` on the POST to add participants in the same call.
 - **Inline project activities**: include `"projectActivities": [{"activity": {"id": X}}]` on the POST.
 - **Inline hourly rates**: include `"projectHourlyRates": [...]` on the POST.
+- **GET project returns hourlyRates IDs**: the `projectHourlyRates` array in the GET response contains `id` for each rate entry — use these directly in PUT without a separate `GET /project/hourlyRates/{id}`. Default `version` is 0 for newly created rates.
 - If you just created the employee for projectManager, reuse its `id` directly.
 
 ## Minimum Payload

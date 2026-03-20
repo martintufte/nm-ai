@@ -17,7 +17,12 @@ That's it. Wall time, iteration count, and parallel vs sequential execution do *
 
 ### How to minimize calls
 
-- **Don't search before creating.** If a task says to create a new entity, POST directly — don't GET first.
+- **Don't GET before POST for the same entity.** If a task says to create a new entity, POST it directly — don't search for it first. (Looking up *other* existing entities you need as dependencies is fine.)
 - **Reuse POST response IDs.** The response contains the ID. Don't GET it again.
 - **Inline creation.** Nest objects (e.g. orders inside invoice) in one call.
 - **Never retry failed calls.** A retry doubles your error count for no benefit.
+- **List GETs return full objects.** Don't re-GET by ID after finding an entity in a list response — it already has `id`, `version`, and all fields.
+
+### Workflow call counts (reference)
+- **Invoice workflow:** 2-4 calls (customer + product + invoice + payment). Customer/product may already exist.
+- **Travel workflow:** 2-6 calls (employee + travelExpense + cost/mileage/perDiem/accommodation). Employee usually exists. Costs/perDiem can be inlined on the travelExpense POST.
