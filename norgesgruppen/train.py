@@ -24,8 +24,10 @@ Usage:
 import argparse
 import logging
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import torch
 from ultralytics import YOLO
@@ -38,7 +40,7 @@ RUNS_DIR = Path(__file__).parent / "runs"
 
 
 @contextmanager
-def working_directory(path: Path):
+def working_directory(path: Path) -> Generator[None, Any, None]:
     """Temporarily switch cwd so Ultralytics side-effect downloads stay contained."""
     previous = Path.cwd()
     os.chdir(path)
@@ -90,6 +92,7 @@ def train_detection(
         imgsz: Input image size (larger = better for small objects on shelves)
         batch: Batch size (adjust for GPU memory)
         resume: Resume from last checkpoint
+        device: "cuda", "cpu" or "auto
     """
     model_name = f"yolov8{model_size}.pt"
     model = YOLO(model_name)

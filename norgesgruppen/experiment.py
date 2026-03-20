@@ -16,17 +16,23 @@ Usage:
 """
 
 import argparse
+import inspect
 import json
 import logging
 import os
+from collections import OrderedDict
 from collections import defaultdict
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import torch
 from ultralytics import YOLO
+from ultralytics.nn import modules as ultralytics_modules
+from ultralytics.nn import tasks as ultralytics_tasks
 
 from norgesgruppen.data.convert import convert_coco_to_yolo
 from norgesgruppen.evaluate import evaluate_map
@@ -44,8 +50,30 @@ CONF_THRESHOLDS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5]
 IOU_THRESHOLDS = [0.3, 0.4, 0.45, 0.5, 0.6, 0.7]
 
 
+def allowlist_ultralytics_checkpoint_classes() -> None:
+    """Allow trusted Ultralytics checkpoint classes for PyTorch 2.6+ loading."""
+    add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
+    if add_safe_globals is None:
+        return
+
+    safe_classes = []
+    for module in (ultralytics_tasks, ultralytics_modules):
+        safe_classes.extend([value for value in vars(module).values() if inspect.isclass(value)])
+
+    safe_classes.extend([value for value in vars(torch.nn).values() if inspect.isclass(value)])
+
+    safe_classes.append(OrderedDict)
+    add_safe_globals(safe_classes)
+
+
+def load_yolo_model(weights: str) -> YOLO:
+    """Load a YOLO model with PyTorch 2.6 checkpoint allowlisting applied."""
+    allowlist_ultralytics_checkpoint_classes()
+    return YOLO(weights)
+
+
 @contextmanager
-def working_directory(path: Path):
+def working_directory(path: Path) -> Generator[None, Any, None]:
     """Temporarily switch cwd so Ultralytics side-effect downloads stay contained."""
     previous = Path.cwd()
     os.chdir(path)
@@ -147,21 +175,21 @@ def run_experiment(
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     if pretrained_weights:
         LOGGER.info("Loading pretrained: %s", pretrained_weights)
-        model = YOLO(pretrained_weights)
+        model = load_yolo_model(pretrained_weights)
     else:
         model_name = f"{model_variant}{model_size}.pt"
         # Download pretrained weights to weights/ dir, not cwd
         local_weights = WEIGHTS_DIR / model_name
         if not local_weights.exists():
             LOGGER.info("Downloading %s to %s...", model_name, WEIGHTS_DIR)
-            tmp_model = YOLO(model_name)
+            tmp_model = load_yolo_model(model_name)
             # ultralytics downloads to cwd; move it
             cwd_weights = Path(model_name)
             if cwd_weights.exists():
                 cwd_weights.rename(local_weights)
             del tmp_model
         LOGGER.info("Starting from: %s", local_weights)
-        model = YOLO(str(local_weights))
+        model = load_yolo_model(str(local_weights))
 
     train_device = resolve_training_device(device)
     LOGGER.info(
@@ -200,6 +228,17 @@ def run_experiment(
     saved_weights = WEIGHTS_DIR / f"{name}.pt"
     saved_weights.write_bytes(best_weights.read_bytes())
     LOGGER.info("Saved trained weights: %s", saved_weights)
+
+    if val_fraction <= 0:
+        LOGGER.info("Skipping inference + threshold sweep because val_fraction=0")
+        results = {**config, "best_settings": None, "sweep": []}
+        (exp_dir / "results.json").write_text(json.dumps(results, indent=2))
+        LOGGER.info("=" * 60)
+        LOGGER.info("RESULTS: %s", exp_dir.name)
+        LOGGER.info("  Full-data training completed without validation sweep")
+        LOGGER.info("  Weights: %s", best_weights)
+        LOGGER.info("=" * 60)
+        return exp_dir
 
     LOGGER.info("Running inference + threshold sweep with: %s", best_weights)
     sweep_results = run_inference_and_sweep(
@@ -257,7 +296,7 @@ def run_inference_and_sweep(
 
     Returns dict with 'best' (best settings+scores) and 'sweep' (all combos).
     """
-    model = YOLO(str(weights_path))
+    model = load_yolo_model(str(weights_path))
 
     # Get val images
     yolo_dir = dataset_yaml.parent
@@ -521,7 +560,9 @@ def main() -> None:
     # --- eval (inference only) ---
     eval_p = sub.add_parser("eval", help="Run inference + threshold sweep on existing weights")
     eval_p.add_argument(
-        "--weights", required=True, help="Path to .pt weights (or name in weights/)"
+        "--weights",
+        required=True,
+        help="Path to .pt weights (or name in weights/)",
     )
     eval_p.add_argument("--name", help="Experiment name (default: eval_<weights_stem>)")
     eval_p.add_argument("--imgsz", type=int, default=1280)

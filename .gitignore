@@ -113,6 +113,7 @@ venv/
 norgesgruppen/data/NM_NGD_coco_dataset/
 norgesgruppen/data/NM_NGD_product_images/
 norgesgruppen/data/yolo/
+norgesgruppen/data/images/
 
 # Training runs
 norgesgruppen/experiments/
@@ -122,6 +123,7 @@ norgesgruppen/weights/
 norgesgruppen/*.pt
 
 # Submission artifacts
-norgesgruppen/submission.zip
+norgesgruppen/submissions/
+norgesgruppen/submissions/
 
 # Tripletex
