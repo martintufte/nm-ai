@@ -18,7 +18,9 @@ Usage:
 import argparse
 import json
 import logging
+import os
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +44,43 @@ CONF_THRESHOLDS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5]
 IOU_THRESHOLDS = [0.3, 0.4, 0.45, 0.5, 0.6, 0.7]
 
 
+@contextmanager
+def working_directory(path: Path):
+    """Temporarily switch cwd so Ultralytics side-effect downloads stay contained."""
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+def resolve_training_device(device: str = "auto") -> str:
+    """Resolve the training device and fail fast on broken CUDA setups."""
+    normalized = device.strip().lower()
+    if normalized != "auto":
+        return device
+
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        LOGGER.info("Using CUDA device 0: %s", gpu_name)
+        return "0"
+
+    cuda_device_count = torch.cuda.device_count()
+    if cuda_device_count > 0:
+        cuda_version = torch.version.cuda or "unknown"
+        msg = (
+            "CUDA device detected, but PyTorch cannot initialize it. "
+            f"torch.version.cuda={cuda_version}, cuda_device_count={cuda_device_count}. "
+            "This usually means the NVIDIA driver is too old for the installed PyTorch CUDA build. "
+            "Update the driver or install a compatible PyTorch build before training."
+        )
+        raise RuntimeError(msg)
+
+    LOGGER.info("No CUDA device available, training on CPU")
+    return "cpu"
+
+
 def run_experiment(
     name: str,
     model_size: str = "m",
@@ -62,6 +101,7 @@ def run_experiment(
     val_fraction: float = 0.15,
     seed: int = 42,
     model_variant: str = "yolov8",
+    device: str = "auto",
 ) -> Path:
     """Run a complete experiment: convert data -> train -> sweep thresholds -> evaluate."""
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
@@ -89,6 +129,7 @@ def run_experiment(
         "patience": patience,
         "val_fraction": val_fraction,
         "seed": seed,
+        "device": device,
     }
     (exp_dir / "config.json").write_text(json.dumps(config, indent=2))
     LOGGER.info("Experiment: %s", exp_dir.name)
@@ -122,27 +163,35 @@ def run_experiment(
         LOGGER.info("Starting from: %s", local_weights)
         model = YOLO(str(local_weights))
 
-    LOGGER.info("Starting training (%d epochs, imgsz=%d)...", epochs, imgsz)
-    _results = model.train(
-        data=str(dataset_yaml),
-        epochs=epochs,
-        imgsz=imgsz,
-        batch=batch,
-        project=str(exp_dir),
-        name="train",
-        exist_ok=True,
-        mosaic=mosaic,
-        mixup=mixup,
-        copy_paste=copy_paste,
-        optimizer=optimizer,
-        lr0=lr0,
-        lrf=lrf,
-        warmup_epochs=warmup_epochs,
-        patience=patience,
-        save_period=max(10, epochs // 5),
-        plots=True,
-        verbose=True,
+    train_device = resolve_training_device(device)
+    LOGGER.info(
+        "Starting training (%d epochs, imgsz=%d, device=%s)...",
+        epochs,
+        imgsz,
+        train_device,
     )
+    with working_directory(WEIGHTS_DIR):
+        _results = model.train(
+            data=str(dataset_yaml),
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch,
+            device=train_device,
+            project=str(exp_dir),
+            name="train",
+            exist_ok=True,
+            mosaic=mosaic,
+            mixup=mixup,
+            copy_paste=copy_paste,
+            optimizer=optimizer,
+            lr0=lr0,
+            lrf=lrf,
+            warmup_epochs=warmup_epochs,
+            patience=patience,
+            save_period=max(10, epochs // 5),
+            plots=True,
+            verbose=True,
+        )
 
     # Step 3: Copy best weights to central weights/ dir
     best_weights = exp_dir / "train" / "weights" / "best.pt"
@@ -463,6 +512,11 @@ def main() -> None:
     train_p.add_argument("--patience", type=int, default=20)
     train_p.add_argument("--val-fraction", type=float, default=0.15)
     train_p.add_argument("--seed", type=int, default=42)
+    train_p.add_argument(
+        "--device",
+        default="auto",
+        help="Training device for Ultralytics (default: auto, prefers CUDA and fails on broken CUDA)",
+    )
 
     # --- eval (inference only) ---
     eval_p = sub.add_parser("eval", help="Run inference + threshold sweep on existing weights")
@@ -506,6 +560,7 @@ def main() -> None:
             patience=args.patience,
             val_fraction=args.val_fraction,
             seed=args.seed,
+            device=args.device,
         )
 
 

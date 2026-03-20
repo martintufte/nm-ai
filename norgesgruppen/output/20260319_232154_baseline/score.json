@@ -1,7 +1,0 @@
-{
-  "predictions": "/home/martintufte/nm-ai/norgesgruppen/output/20260319_232154_baseline/predictions.json",
-  "annotations": "norgesgruppen/data/NM_NGD_coco_dataset/train/annotations.json",
-  "detection_map": 0.00043047783039173483,
-  "classification_map": 2.7811769941039048e-05,
-  "final_score": 0.0003096780122565261
-}
