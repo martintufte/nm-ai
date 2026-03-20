@@ -8,15 +8,23 @@ Usage:
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
+from typing import Literal
+from typing import cast
 
 import anthropic
-import requests
+import anthropic.types.beta
+import httpx
 from anthropic import Anthropic
 from anthropic import beta_tool
+from anthropic.lib.tools import BetaFunctionTool
 from anthropic.lib.tools import ToolError
 from fastapi import Depends
 from fastapi import FastAPI
@@ -29,10 +37,20 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 
+LOG_DIR = Path(os.environ.get("LOG_DIR", "/tmp/tripletex-logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_log_format = "%(asctime)s %(levelname)s %(name)s — %(message)s"
+_log_datefmt = "%H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
+    format=_log_format,
+    datefmt=_log_datefmt,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "solve.log"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -41,7 +59,8 @@ app = FastAPI(title="Tripletex AI Agent")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
-    request: Request, exc: RequestValidationError,
+    request: Request,
+    exc: RequestValidationError,
 ) -> JSONResponse:
     body = await request.body()
     logger.error(
@@ -59,15 +78,16 @@ async def validation_exception_handler(
         content={"detail": errors_str},
     )
 
+
 # ---------------------------------------------------------------------------
-# Auth – static bearer token from environment
+# Auth - static bearer token from environment
 # ---------------------------------------------------------------------------
 BEARER_TOKEN = os.environ["BEARER_TOKEN"]
 _security = HTTPBearer()
 
 
 def verify_token(
-    credentials: HTTPAuthorizationCredentials = Depends(_security),
+    credentials: HTTPAuthorizationCredentials = Depends(_security),  # noqa: B008
 ) -> None:
     if credentials.credentials != BEARER_TOKEN:
         raise HTTPException(
@@ -75,17 +95,110 @@ def verify_token(
             detail="Invalid bearer token",
         )
 
+
 # ---------------------------------------------------------------------------
 # Load system prompt components at module level
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-_SYSTEM_PROMPT = (_HERE / "prompt.md").read_text()
-_API_REFERENCE = (_HERE / "api_reference.md").read_text()
-_FULL_SYSTEM_PROMPT = f"{_SYSTEM_PROMPT}\n\n{_API_REFERENCE}"
+_SKILLS_DIR = _HERE / "skills"
+
+# Assemble prompt in deliberate order:
+# 1. Skill index — compact table telling the agent what's available via read_skill
+# 2. Task prompt — role, tools, assumptions, task categories, planning
+# 3. Scoring — scoring rules and efficiency tips (last, so it sticks)
+_task_prompt = (_HERE / "prompt.md").read_text()
+_scoring = (_SKILLS_DIR / "scoring.md").read_text()
+
+# Build a compact index of available skill files (excluding scoring, which stays in prompt)
+_AVAILABLE_SKILLS = {
+    p.stem: p for p in sorted(_SKILLS_DIR.glob("*.md")) if p.name != "scoring.md"
+}
+
+_SKILL_INDEX = """\
+## Available Skill References
+
+Call `read_skill(skill_name)` to read the full reference for an entity type. \
+You MUST read the relevant skill before making POST/PUT calls. \
+This tool is free and does not count toward your efficiency score.
+
+| Skill | Covers |
+|-------|--------|
+| _general | API patterns: references, responses, versioning, inline creation, error translations, lookups |
+| customer | Customer CRUD, address nested updates |
+| department | Department CRUD (no dependencies) |
+| employee | Employee + Employment, userType, department req, dateOfBirth on PUT |
+| invoice | Invoice + Orders + OrderLines, payment/credit note (query params), bank account prereq |
+| ledger | Ledger accounts, postings, vouchers, VAT codes, currency |
+| product | Product CRUD, VAT gotcha, unique names |
+| project | Project CRUD, projectManager, inline participants/activities |
+| travel | Travel expenses, costs, mileage, per diem, accommodation, rate categories |"""
+
+_FULL_SYSTEM_PROMPT = "\n\n".join(
+    [_SKILL_INDEX, _task_prompt, _scoring]
+)
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-MAX_ITERATIONS = 50
+MAX_ITERATIONS = 20
 MAX_RESPONSE_CHARS = 20_000  # Truncate large API responses
+
+
+@dataclass
+class CallRecord:
+    method: str
+    endpoint: str
+    status_code: int
+    is_error: bool
+    params: dict | None = None
+    data_summary: str | None = None
+
+
+@dataclass
+class CallTracker:
+    calls: list[CallRecord] = field(default_factory=list)
+
+    def record(
+        self,
+        method: str,
+        endpoint: str,
+        status_code: int,
+        *,
+        params: dict | None = None,
+        data: dict | None = None,
+    ) -> None:
+        # Keep a short summary of POST/PUT body for the log
+        data_summary = None
+        if data:
+            data_summary = json.dumps(data, ensure_ascii=False)[:200]
+
+        self.calls.append(
+            CallRecord(
+                method=method,
+                endpoint=endpoint,
+                status_code=status_code,
+                is_error=400 <= status_code < 500,
+                params=params,
+                data_summary=data_summary,
+            )
+        )
+
+    @property
+    def api_calls(self) -> int:
+        return len(self.calls)
+
+    @property
+    def errors(self) -> int:
+        return sum(1 for c in self.calls if c.is_error)
+
+    def summary_parts(self) -> list[str]:
+        parts = []
+        for c in self.calls:
+            s = f"{c.method} {c.endpoint} → {c.status_code}"
+            if c.params:
+                s += f" params={c.params}"
+            if c.data_summary:
+                s += f" data={c.data_summary}"
+            parts.append(s)
+        return parts
 
 
 # ---------------------------------------------------------------------------
@@ -109,13 +222,13 @@ class SolveResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Tripletex session factory
 # ---------------------------------------------------------------------------
-def get_tripletex_session(base_url: str, session_token: str) -> requests.Session:
-    """Create an authenticated requests session for the Tripletex API."""
-    session = requests.Session()
-    session.auth = ("0", session_token)
-    session.headers.update({"Content-Type": "application/json"})
-    session.base_url = base_url  # type: ignore[attr-defined]
-    return session
+def get_tripletex_client(base_url: str, session_token: str) -> httpx.Client:
+    """Create an authenticated httpx client for the Tripletex API."""
+    return httpx.Client(
+        base_url=base_url,
+        auth=("0", session_token),
+        headers={"Content-Type": "application/json"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,30 +241,46 @@ def _truncate(text: str) -> str:
     return text[:MAX_RESPONSE_CHARS] + f"\n... [truncated, {len(text)} chars total]"
 
 
+def _normalize_endpoint(endpoint: str) -> str:
+    """Strip leading slash and redundant /v2/ prefix from an endpoint.
+
+    The base_url already includes /v2, so passing '/v2/customer' would
+    produce '/v2/v2/customer'. This helper prevents that.
+    """
+    endpoint = endpoint.lstrip("/")
+    endpoint = endpoint.removeprefix("v2/")
+    return endpoint
+
+
 # ---------------------------------------------------------------------------
 # Tool factory — returns @beta_tool-decorated closures bound to a session
 # ---------------------------------------------------------------------------
-def make_tools(session: requests.Session):  # noqa: ANN201
-    """Create Tripletex API tools bound to the given requests session."""
+def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionTool]:
+    """Create Tripletex API tools bound to the given httpx client and call tracker."""
 
     @beta_tool
     def tripletex_get(endpoint: str, params: dict | None = None) -> str:
         """GET request to the Tripletex API. Returns JSON response.
 
         Args:
-            endpoint: API path, e.g. '/v2/employee' or '/v2/invoice?fields=id,invoiceNumber'.
+            endpoint: API path, e.g. 'employee' or 'invoice'. Do NOT include /v2/ prefix.
             params: Optional query parameters as key-value pairs.
         """
-        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-        logger.info("GET %s params=%s", url, params)
+        path = _normalize_endpoint(endpoint)
+        logger.info("GET %s params=%s", path, params)
         try:
-            resp = session.get(url, params=params)
+            resp = client.get(path, params=params)
             resp.raise_for_status()
-        except requests.HTTPError as e:
-            status_code = e.response.status_code if e.response is not None else "?"
-            body = e.response.text[:2000] if e.response is not None else str(e)
-            logger.warning("GET %s → HTTP %s: %s", url, status_code, body)
-            raise ToolError(f"HTTP {status_code}: {body}") from e
+        except httpx.HTTPStatusError as e:
+            tracker.record("GET", path, e.response.status_code, params=params)
+            logger.warning(
+                "GET %s → HTTP %s: %s",
+                path,
+                e.response.status_code,
+                e.response.text[:2000],
+            )
+            raise ToolError(f"HTTP {e.response.status_code}: {e.response.text[:2000]}") from e
+        tracker.record("GET", path, resp.status_code, params=params)
         return _truncate(json.dumps(resp.json()))
 
     @beta_tool
@@ -159,19 +288,24 @@ def make_tools(session: requests.Session):  # noqa: ANN201
         """POST request to the Tripletex API. Returns JSON response.
 
         Args:
-            endpoint: API path, e.g. '/v2/employee'.
+            endpoint: API path, e.g. 'employee'. Do NOT include /v2/ prefix.
             data: JSON body to send.
         """
-        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-        logger.info("POST %s data=%s", url, json.dumps(data)[:500])
+        path = _normalize_endpoint(endpoint)
+        logger.info("POST %s data=%s", path, json.dumps(data)[:500])
         try:
-            resp = session.post(url, json=data)
+            resp = client.post(path, json=data)
             resp.raise_for_status()
-        except requests.HTTPError as e:
-            status_code = e.response.status_code if e.response is not None else "?"
-            body = e.response.text[:2000] if e.response is not None else str(e)
-            logger.warning("POST %s → HTTP %s: %s", url, status_code, body)
-            raise ToolError(f"HTTP {status_code}: {body}") from e
+        except httpx.HTTPStatusError as e:
+            tracker.record("POST", path, e.response.status_code, data=data)
+            logger.warning(
+                "POST %s → HTTP %s: %s",
+                path,
+                e.response.status_code,
+                e.response.text[:2000],
+            )
+            raise ToolError(f"HTTP {e.response.status_code}: {e.response.text[:2000]}") from e
+        tracker.record("POST", path, resp.status_code, data=data)
         return _truncate(json.dumps(resp.json()))
 
     @beta_tool
@@ -179,19 +313,24 @@ def make_tools(session: requests.Session):  # noqa: ANN201
         """PUT request to the Tripletex API. Returns JSON response.
 
         Args:
-            endpoint: API path, e.g. '/v2/employee/123'.
+            endpoint: API path, e.g. 'employee/123'. Do NOT include /v2/ prefix.
             data: JSON body to send.
         """
-        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-        logger.info("PUT %s data=%s", url, json.dumps(data)[:500])
+        path = _normalize_endpoint(endpoint)
+        logger.info("PUT %s data=%s", path, json.dumps(data)[:500])
         try:
-            resp = session.put(url, json=data)
+            resp = client.put(path, json=data)
             resp.raise_for_status()
-        except requests.HTTPError as e:
-            status_code = e.response.status_code if e.response is not None else "?"
-            body = e.response.text[:2000] if e.response is not None else str(e)
-            logger.warning("PUT %s → HTTP %s: %s", url, status_code, body)
-            raise ToolError(f"HTTP {status_code}: {body}") from e
+        except httpx.HTTPStatusError as e:
+            tracker.record("PUT", path, e.response.status_code, data=data)
+            logger.warning(
+                "PUT %s → HTTP %s: %s",
+                path,
+                e.response.status_code,
+                e.response.text[:2000],
+            )
+            raise ToolError(f"HTTP {e.response.status_code}: {e.response.text[:2000]}") from e
+        tracker.record("PUT", path, resp.status_code, data=data)
         return _truncate(json.dumps(resp.json()))
 
     @beta_tool
@@ -199,31 +338,53 @@ def make_tools(session: requests.Session):  # noqa: ANN201
         """DELETE request to the Tripletex API. Returns confirmation on success.
 
         Args:
-            endpoint: API path, e.g. '/v2/employee/123'.
+            endpoint: API path, e.g. 'employee/123'. Do NOT include /v2/ prefix.
         """
-        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-        logger.info("DELETE %s", url)
+        path = _normalize_endpoint(endpoint)
+        logger.info("DELETE %s", path)
         try:
-            resp = session.delete(url)
+            resp = client.delete(path)
             resp.raise_for_status()
-        except requests.HTTPError as e:
-            status_code = e.response.status_code if e.response is not None else "?"
-            body = e.response.text[:2000] if e.response is not None else str(e)
-            logger.warning("DELETE %s → HTTP %s: %s", url, status_code, body)
-            raise ToolError(f"HTTP {status_code}: {body}") from e
+        except httpx.HTTPStatusError as e:
+            tracker.record("DELETE", path, e.response.status_code)
+            logger.warning(
+                "DELETE %s → HTTP %s: %s",
+                path,
+                e.response.status_code,
+                e.response.text[:2000],
+            )
+            raise ToolError(f"HTTP {e.response.status_code}: {e.response.text[:2000]}") from e
+        tracker.record("DELETE", path, resp.status_code)
         return json.dumps({"status": "deleted"})
 
-    return [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+    @beta_tool
+    def read_skill(skill_name: str) -> str:
+        """Read a skill reference file. Call this BEFORE making POST/PUT calls.
+
+        This tool is free — it does not count toward your efficiency score.
+
+        Args:
+            skill_name: Stem name of the skill, e.g. 'employee', 'invoice', '_general'.
+        """
+        if skill_name not in _AVAILABLE_SKILLS:
+            available = ", ".join(sorted(_AVAILABLE_SKILLS))
+            raise ToolError(
+                f"Unknown skill '{skill_name}'. Available skills: {available}"
+            )
+        return _AVAILABLE_SKILLS[skill_name].read_text()
+
+    return [read_skill, tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
 
 
 # ---------------------------------------------------------------------------
 # Message building
 # ---------------------------------------------------------------------------
 def build_user_message(
-    task_prompt: str, files: list[str] | None,
-) -> list[anthropic.types.ContentBlockParam]:
+    task_prompt: str,
+    files: list[str] | None,
+) -> list[anthropic.types.beta.BetaContentBlockParam]:
     """Build the initial user message with text and optional file attachments."""
-    content: list[anthropic.types.ContentBlockParam] = [
+    content: list[anthropic.types.beta.BetaContentBlockParam] = [
         {"type": "text", "text": f"## Task\n\n{task_prompt}"},
     ]
 
@@ -232,7 +393,7 @@ def build_user_message(
             media_type = _detect_media_type(file_b64)
             # Strip data URI prefix if present
             if "," in file_b64 and file_b64.index(",") < 100:
-                file_b64 = file_b64.split(",", 1)[1]
+                file_b64 = file_b64.split(",", 1)[1]  # noqa: PLW2901
 
             if media_type == "application/pdf":
                 content.append(
@@ -246,12 +407,16 @@ def build_user_message(
                     },
                 )
             else:
+                image_media_type = cast(
+                    Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
+                    media_type,
+                )
                 content.append(
                     {
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": media_type,
+                            "media_type": image_media_type,
                             "data": file_b64,
                         },
                     },
@@ -275,7 +440,7 @@ def _detect_media_type(b64_string: str) -> str:
             return "image/png"
         if raw[:2] == b"\xff\xd8":
             return "image/jpeg"
-    except Exception:
+    except (ValueError, binascii.Error):
         pass
 
     return "image/png"  # Default fallback
@@ -286,49 +451,72 @@ def _detect_media_type(b64_string: str) -> str:
 # ---------------------------------------------------------------------------
 def parse_and_execute_task(
     task_prompt: str,
-    session: requests.Session,
+    client: httpx.Client,
     files: list[str] | None,
-) -> None:
+) -> CallTracker:
     """Run the Claude agentic loop to solve a Tripletex task.
 
     Uses the SDK's beta tool runner which automatically handles:
     message accumulation, tool call dispatch, error propagation,
     and stop condition detection.
+
+    Returns the CallTracker with recorded API calls.
     """
-    client = Anthropic()
-    tools = make_tools(session)
+    tracker = CallTracker()
+    anthropic_client = Anthropic()
+    tools = make_tools(client, tracker)
     user_content = build_user_message(task_prompt, files)
 
-    runner = client.beta.messages.tool_runner(
+    t0 = time.monotonic()
+
+    runner = anthropic_client.beta.messages.tool_runner(
         model=MODEL,
         max_tokens=16384,
-        system=_FULL_SYSTEM_PROMPT,
+        system=[
+            {
+                "type": "text",
+                "text": _FULL_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            },
+        ],
         tools=tools,
         messages=[{"role": "user", "content": user_content}],
         max_iterations=MAX_ITERATIONS,
     )
 
+    iteration = 0
     for iteration, message in enumerate(runner, 1):
+        tool_names = [
+            b.name for b in message.content if isinstance(b, anthropic.types.beta.BetaToolUseBlock)
+        ]
         logger.info(
-            "Iteration %d — stop_reason=%s, usage=%s",
+            "Iteration %d — stop_reason=%s tools=%s usage=%s",
             iteration,
             message.stop_reason,
+            tool_names or None,
             message.usage,
         )
 
-    logger.info("Agent finished after %d iterations", iteration)
+    elapsed = time.monotonic() - t0
+    call_lines = "\n  ".join(tracker.summary_parts())
+    logger.info(
+        "TASK SUMMARY | api_calls=%d | errors=%d | elapsed=%.1fs\n  %s",
+        tracker.api_calls,
+        tracker.errors,
+        elapsed,
+        call_lines,
+    )
+    return tracker
 
 
 # ---------------------------------------------------------------------------
 # FastAPI endpoints
 # ---------------------------------------------------------------------------
-@app.post("/solve", response_model=SolveResponse, dependencies=[Depends(verify_token)])
+@app.post("/solve", dependencies=[Depends(verify_token)])
 async def solve(request: SolveRequest) -> SolveResponse:
     """Main endpoint called by the competition platform."""
     file_count = len(request.files) if request.files else 0
-    file_sizes = (
-        [len(f) for f in request.files] if request.files else []
-    )
+    file_sizes = [len(f) for f in request.files] if request.files else []
     creds = request.tripletex_credentials
     logger.info(
         "POST /solve — base_url=%s files=%d file_sizes=%s prompt_length=%d",
@@ -343,7 +531,7 @@ async def solve(request: SolveRequest) -> SolveResponse:
             media = _detect_media_type(f)
             logger.info("  File %d: %s, %d chars base64", i, media, len(f))
 
-    session = get_tripletex_session(creds.base_url, creds.session_token)
+    client = get_tripletex_client(creds.base_url, creds.session_token)
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.warning("ANTHROPIC_API_KEY is not set, skipping LLM agent loop")
@@ -352,7 +540,7 @@ async def solve(request: SolveRequest) -> SolveResponse:
     await asyncio.to_thread(
         parse_and_execute_task,
         task_prompt=request.prompt,
-        session=session,
+        client=client,
         files=request.files,
     )
 

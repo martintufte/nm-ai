@@ -6,3 +6,6 @@ NORGESGRUPPEN_ANNOTATIONS ?= norgesgruppen/data/NM_NGD_coco_dataset/train/annota
 
 ngd:
 	uv run python -m norgesgruppen.baseline --annotations $(NORGESGRUPPEN_ANNOTATIONS) --output $(NORGESGRUPPEN_OUTPUT)
+
+make static:
+	uv run pre-commit run -a

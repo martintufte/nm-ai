@@ -1,9 +1,12 @@
 """Extract competition-relevant subset of Tripletex OpenAPI spec."""
 
 import json
+import logging
 import re
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 PREFIXES = [
     "/employee",
@@ -43,13 +46,11 @@ def resolve_transitive(all_schemas: dict, initial_refs: set[str]) -> dict:
             continue
         seen.add(name)
         if name not in all_schemas:
-            print(f"  WARNING: referenced schema '{name}' not found", file=sys.stderr)
+            logger.warning("referenced schema '%s' not found", name)
             continue
         schema = all_schemas[name]
         resolved[name] = schema
-        for dep in collect_refs(schema):
-            if dep not in seen:
-                queue.append(dep)
+        queue.extend(dep for dep in collect_refs(schema) if dep not in seen)
 
     return resolved
 
@@ -59,7 +60,7 @@ def main() -> None:
     input_path = root / "docs" / "tripletex-openapi.json"
     output_path = root / "docs" / "tripletex-openapi-competition.json"
 
-    with open(input_path) as f:
+    with input_path.open() as f:
         spec = json.load(f)
 
     # Filter paths
@@ -70,21 +71,25 @@ def main() -> None:
             # by verifying the char after prefix is / or { or end-of-string
             for prefix in PREFIXES:
                 if path.startswith(prefix):
-                    rest = path[len(prefix):]
+                    rest = path[len(prefix) :]
                     if rest == "" or rest[0] in ("/", "{", ":"):
                         filtered_paths[path] = ops
                         break
 
-    print(f"Paths: {len(filtered_paths)} (from {len(spec.get('paths', {}))})")
+    logger.info("Paths: %d (from %d)", len(filtered_paths), len(spec.get("paths", {})))
 
     # Collect all $ref from filtered paths
     all_schemas = spec.get("components", {}).get("schemas", {})
     path_refs = collect_refs(filtered_paths)
-    print(f"Direct schema refs from paths: {len(path_refs)}")
+    logger.info("Direct schema refs from paths: %d", len(path_refs))
 
     # Transitively resolve
     resolved_schemas = resolve_transitive(all_schemas, path_refs)
-    print(f"Schemas after transitive resolution: {len(resolved_schemas)} (from {len(all_schemas)})")
+    logger.info(
+        "Schemas after transitive resolution: %d (from %d)",
+        len(resolved_schemas),
+        len(all_schemas),
+    )
 
     # Build output spec
     output = {
@@ -101,27 +106,27 @@ def main() -> None:
     if "securitySchemes" in spec.get("components", {}):
         output["components"]["securitySchemes"] = spec["components"]["securitySchemes"]
 
-    with open(output_path, "w") as f:
+    with output_path.open("w") as f:
         json.dump(output, f, indent=2)
 
     size_kb = output_path.stat().st_size / 1024
-    print(f"Output: {output_path} ({size_kb:.0f} KB)")
+    logger.info("Output: %s (%.0f KB)", output_path, size_kb)
 
     # Verification: check all $refs resolve
     output_text = json.dumps(output)
     all_refs_in_output = set(REF_PATTERN.findall(output_text))
     missing = all_refs_in_output - set(resolved_schemas.keys())
     if missing:
-        print(f"ERROR: {len(missing)} unresolved $ref(s): {missing}", file=sys.stderr)
+        logger.error("%d unresolved $ref(s): %s", len(missing), missing)
         sys.exit(1)
     else:
-        print("All $ref references resolve correctly.")
+        logger.info("All $ref references resolve correctly.")
 
     # Spot-check
     spot_checks = ["/employee", "/invoice", "/travelExpense/{id}", "/ledger/voucher/{id}/:reverse"]
     for path in spot_checks:
-        status = "FOUND" if path in filtered_paths else "MISSING"
-        print(f"  Spot-check {path}: {status}")
+        found = "FOUND" if path in filtered_paths else "MISSING"
+        logger.info("Spot-check %s: %s", path, found)
 
 
 if __name__ == "__main__":

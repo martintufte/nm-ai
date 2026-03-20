@@ -91,6 +91,8 @@ Get customer by ID.
 ### `PUT /customer/{id}`
 Update customer. 
 
+**Note:** Nested objects (e.g. `postalAddress`) require their own `id`/`version` or updates are silently ignored.
+
 Body: `Customer` (see above)
 
 ---
@@ -145,12 +147,17 @@ Query params: `id`, `firstName`, `lastName`, `employeeNumber`, `email`, `allowIn
 ### `POST /employee`
 Create one employee.
 
+**Note:** `userType` and `department` are required despite not being marked so in the spec.
+Minimum NO_ACCESS: `{"firstName":"X","lastName":"Y","userType":"NO_ACCESS","department":{"id":DEPT_ID}}`
+Minimum STANDARD: add `"email":"x@y.com"` to the above.
+Employment is NOT auto-created; use `"employments":[{"startDate":"YYYY-MM-DD"}]` to inline it.
+
 **Employee** writable fields:
   - `firstName`: string
   - `lastName`: string
   - `employeeNumber`: string
-  - `dateOfBirth`: string
-  - `email`: string
+  - `dateOfBirth`: string — **required on PUT** (not on POST)
+  - `email`: string — **required for STANDARD/EXTENDED userType** (not NO_ACCESS)
   - `phoneNumberMobileCountry`: Country
   - `phoneNumberMobile`: string
   - `phoneNumberHome`: string
@@ -163,11 +170,11 @@ Create one employee.
   - `bic`: string — Bic (swift) field
   - `creditorBankCountryId`: integer(int32) — Country of creditor bank field
   - `usesAbroadPayment`: boolean — UsesAbroadPayment field. Determines if we should use domestic or abroad remit...
-  - `userType`: string — Define the employee's user type.<br>STANDARD: Reduced access. Users with limi...
+  - `userType`: string — **secretly required.** Values: "STANDARD", "EXTENDED", "NO_ACCESS"
   - `isContact`: boolean — Determines if the employee is a contact (external) in the company.
   - `comments`: string
   - `address`: Address
-  - `department`: Department
+  - `department`: Department — **secretly required.** Must be `{"id": DEPT_ID}`
   - `employments`: [Employment]
   - `holidayAllowanceEarned`: HolidayAllowanceEarned
   - `employeeCategory`: EmployeeCategory
@@ -188,6 +195,8 @@ Create a new employee category.
 
 ### `DELETE /employee/category/list`
 Delete multiple employee categories
+
+Query params: `ids` **(required)**
 
 ### `POST /employee/category/list`
 Create new employee categories.
@@ -272,7 +281,7 @@ Find all employment form type IDs.
 ### `GET /employee/employment/employmentType/maritimeEmploymentType`
 Find all maritime employment type IDs.
 
-Query params: `type`
+Query params: `type` **(required)**
 
 ### `GET /employee/employment/employmentType/salaryType`
 Find all salary type IDs.
@@ -341,8 +350,12 @@ Query params: `employeeId`
 ### `PUT /employee/entitlement/:grantClientEntitlementsByTemplate`
 [BETA] Update employee entitlements in client account.
 
+Query params: `employeeId` **(required)**, `customerId` **(required)**, `template` **(required)**
+
 ### `PUT /employee/entitlement/:grantEntitlementsByTemplate`
 [BETA] Update employee entitlements.
+
+Query params: `employeeId` **(required)**, `template` **(required)**
 
 ### `GET /employee/entitlement/client`
 [BETA] Find all entitlements at client for user.
@@ -462,6 +475,8 @@ Get employee by ID.
 ### `PUT /employee/{id}`
 Update employee.
 
+**Note:** `dateOfBirth` is required on PUT (not required on POST).
+
 Body: `Employee` (see above)
 
 ---
@@ -471,10 +486,13 @@ Body: `Employee` (see above)
 ### `GET /invoice`
 Find invoices corresponding with sent data. Includes charged outgoing invoices only.
 
-Query params: `id`, `invoiceDateFrom`, `invoiceDateTo`, `invoiceNumber`, `kid`, `voucherId`, `customerId`
+Query params: `id`, `invoiceDateFrom` **(required)**, `invoiceDateTo` **(required)**, `invoiceNumber`, `kid`, `voucherId`, `customerId`
 
 ### `POST /invoice`
 Create invoice. Related Order and OrderLines can be created first, or included as new objects inside the Invoice.
+
+**PREREQUISITE:** Company must have a bank account number set (`PUT /ledger/account/{id}` with `bankAccountNumber`).
+`orders` must be non-empty (at least one order with orderLines). Each inline order needs `deliveryDate`.
 
 **Invoice** writable fields:
   - `invoiceNumber`: integer(int32) — If value is set to 0, the invoice number will be generated.
@@ -495,7 +513,7 @@ Create invoice. Related Order and OrderLines can be created first, or included a
 ### `GET /invoice/details`
 Find ProjectInvoiceDetails corresponding with sent data.
 
-Query params: `id`, `invoiceDateFrom`, `invoiceDateTo`
+Query params: `id`, `invoiceDateFrom` **(required)**, `invoiceDateTo` **(required)**
 
 ### `GET /invoice/details/{id}`
 Get ProjectInvoiceDetails by ID.
@@ -517,14 +535,28 @@ Get invoice by ID.
 ### `PUT /invoice/{id}/:createCreditNote`
 Creates a new Invoice representing a credit memo that nullifies the given invoice. Updates this invoice and any pre-existing inverse invoice.
 
+**Uses QUERY PARAMS, not request body!** `?date=YYYY-MM-DD&comment=reason`
+`date` required, `comment` optional. Returns a new invoice object (the credit note).
+
+Query params: `date` **(required)**
+
 ### `PUT /invoice/{id}/:createReminder`
 Create invoice reminder and sends it by the given dispatch type. Supports the reminder types SOFT_REMINDER, REMINDER and NOTICE_OF_DEBT_COLLECTION. DispatchType NETS_PRINT must have type NOTICE_OF_DEBT_COLLECTION. SMS and NETS_PRINT must be activated prior to usage in the API.
+
+Query params: `type` **(required)**, `date` **(required)**
 
 ### `PUT /invoice/{id}/:payment`
 Update invoice. The invoice is updated with payment information. The amount is in the invoice’s currency.
 
+**Uses QUERY PARAMS, not request body!** `?paymentDate=YYYY-MM-DD&paymentTypeId=X&paidAmount=1000.0`
+All three query params are required. Send empty body.
+
+Query params: `paymentDate` **(required)**, `paymentTypeId` **(required)**, `paidAmount` **(required)**
+
 ### `PUT /invoice/{id}/:send`
 Send invoice by ID and sendType. Optionally override email recipient.
+
+Query params: `sendType` **(required)**
 
 ### `GET /invoice/{invoiceId}/pdf`
 Get invoice document by invoice ID.
@@ -576,6 +608,8 @@ Create a new account.
 ### `DELETE /ledger/account/list`
 Delete multiple accounts.
 
+Query params: `ids` **(required)**
+
 ### `POST /ledger/account/list`
 Create several accounts.
 
@@ -600,7 +634,7 @@ Body: `Account` (see above)
 ### `GET /ledger/posting`
 Find postings corresponding with sent data.
 
-Query params: `dateFrom`, `dateTo`, `openPostings`, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId` (+6 more)
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**, `openPostings`, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId` (+6 more)
 
 ### `PUT /ledger/posting/:closePostings`
 Close postings.
@@ -608,7 +642,7 @@ Close postings.
 ### `GET /ledger/posting/openPost`
 Find open posts corresponding with sent data.
 
-Query params: `date`, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId`, `accountNumberFrom`, `accountNumberTo` (+3 more)
+Query params: `date` **(required)**, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId`, `accountNumberFrom`, `accountNumberTo` (+3 more)
 
 ### `GET /ledger/posting/{id}`
 Find postings by ID.
@@ -620,7 +654,7 @@ Find postings by ID.
 ### `GET /ledger/voucher`
 Find vouchers corresponding with sent data.
 
-Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom`, `dateTo`
+Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `POST /ledger/voucher`
 Add new voucher. IMPORTANT: Also creates postings. Only the gross amounts will be used. Amounts should be rounded to 2 decimals.
@@ -645,7 +679,7 @@ Query params: `externalVoucherNumber`
 ### `GET /ledger/voucher/>nonPosted`
 Find non-posted vouchers.
 
-Query params: `dateFrom`, `dateTo`, `includeNonApproved`, `changedSince`
+Query params: `dateFrom`, `dateTo`, `includeNonApproved` **(required)**, `changedSince`
 
 ### `GET /ledger/voucher/>voucherReception`
 Find vouchers in voucher reception.
@@ -711,6 +745,8 @@ Body: `Voucher` (see above)
 ### `PUT /ledger/voucher/{id}/:reverse`
 Reverses the voucher, and returns the reversed voucher. Supports reversing most voucher types, except salary transactions.
 
+Query params: `date` **(required)**
+
 ### `PUT /ledger/voucher/{id}/:sendToInbox`
 Send voucher to inbox.
 
@@ -739,10 +775,12 @@ Get PDF representation of voucher by ID.
 ### `GET /order`
 Find orders corresponding with sent data.
 
-Query params: `id`, `number`, `customerId`, `orderDateFrom`, `orderDateTo`, `deliveryComment`, `isClosed`, `isSubscription`
+Query params: `id`, `number`, `customerId`, `orderDateFrom` **(required)**, `orderDateTo` **(required)**, `deliveryComment`, `isClosed`, `isSubscription`
 
 ### `POST /order`
 Create order.
+
+**Note:** When used inside an invoice, `deliveryDate` is secretly required on each order.
 
 **Order** writable fields:
   - `customer`: Customer
@@ -789,6 +827,8 @@ Create order.
 
 ### `PUT /order/:invoiceMultipleOrders`
 [BETA] Charges a single customer invoice from multiple orders. The orders must be to the same customer, currency, due date, receiver email, attn. and smsNotificationNumber
+
+Query params: `id` **(required)**, `invoiceDate` **(required)**
 
 ### `POST /order/list`
 [BETA] Create multiple Orders with OrderLines. Max 100 at a time.
@@ -858,7 +898,7 @@ Create multiple order lines.
 ### `GET /order/orderline/orderLineTemplate`
 [BETA] Get order line template from order and product
 
-Query params: `orderId`, `productId`
+Query params: `orderId` **(required)**, `productId` **(required)**
 
 ### `DELETE /order/orderline/{id}`
 [BETA] Delete order line by ID.
@@ -894,6 +934,8 @@ Send Packing Note to customer by email.
 ### `DELETE /order/{id}`
 Delete order.
 
+**Returns 422 if invoices exist.** Orders with invoices are permanent.
+
 ### `GET /order/{id}`
 Get order by ID.
 
@@ -905,11 +947,15 @@ Body: `Order` (see above)
 ### `PUT /order/{id}/:approveSubscriptionInvoice`
 To create a subscription invoice, first create a order with the subscription enabled, then approve it with this method. This approves the order for subscription invoicing.
 
+Query params: `invoiceDate` **(required)**
+
 ### `PUT /order/{id}/:attach`
 Attach document to specified order ID.
 
 ### `PUT /order/{id}/:invoice`
 Create new invoice or subscription invoice from order.
+
+Query params: `invoiceDate` **(required)**
 
 ### `PUT /order/{id}/:unApproveSubscriptionInvoice`
 Unapproves the order for subscription invoicing.
@@ -925,6 +971,9 @@ Query params: `number`, `ids`, `productNumber`, `name`, `ean`, `isInactive`, `is
 
 ### `POST /product`
 Create new product.
+
+**Note:** Product names must be unique. Omit `vatType` — most VAT codes are invalid for products.
+`priceIncludingVatCurrency` does NOT auto-calculate excl price; always set `priceExcludingVatCurrency` explicitly.
 
 **Product** writable fields:
   - `name`: string
@@ -987,6 +1036,8 @@ Create new product group. Only available for Logistics Basic.
 
 ### `DELETE /product/group/list`
 Delete multiple product groups. Only available for Logistics Basic.
+
+Query params: `ids` **(required)**
 
 ### `POST /product/group/list`
 Add multiple products groups. Only available for Logistics Basic.
@@ -1089,7 +1140,7 @@ Update logistics settings for the logged in company.
 ### `GET /product/productPrice`
 Find prices for a product. Only available for Logistics Basic.
 
-Query params: `productId`, `fromDate`, `toDate`, `showOnlyLastPrice`
+Query params: `productId` **(required)**, `fromDate`, `toDate`, `showOnlyLastPrice`
 
 ### `GET /product/supplierProduct`
 Find products corresponding with sent data.
@@ -1215,6 +1266,8 @@ Query params: `id`, `name`, `number`, `isOffer`, `projectManagerId`, `customerAc
 ### `POST /project`
 Add new project.
 
+**Note:** `startDate`, `projectManager`, and `isInternal` are all required despite the spec not marking them.
+
 **Project** writable fields:
   - `name`: string
   - `number`: string — If NULL, a number is generated automatically.
@@ -1222,7 +1275,7 @@ Add new project.
   - `projectManager`: Employee
   - `department`: Department
   - `mainProject`: Project
-  - `startDate`: string
+  - `startDate`: string — **secretly required.** ISO date string
   - `endDate`: string
   - `customer`: Customer
   - `isClosed`: boolean
@@ -1270,12 +1323,12 @@ Query params: `includeProjectOffers`, `employeeId`, `date`
 ### `GET /project/batchPeriod/budgetStatusByProjectIds`
 Get the budget status for the projects in the specific period.
 
-Query params: `ids`
+Query params: `ids` **(required)**
 
 ### `GET /project/batchPeriod/invoicingReserveByProjectIds`
 Get the invoicing reserve for the projects in the specific period.
 
-Query params: `ids`, `dateFrom`, `dateTo`
+Query params: `ids` **(required)**, `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `GET /project/category`
 Find project categories corresponding with sent data.
@@ -1302,7 +1355,7 @@ Body: `ProjectCategory` (see above)
 ### `GET /project/controlForm`
 [BETA] Get project control forms by project ID.
 
-Query params: `projectId`
+Query params: `projectId` **(required)**
 
 ### `GET /project/controlForm/{id}`
 [BETA] Get project control form by ID.
@@ -1335,8 +1388,12 @@ Create a project hourly rate.
 ### `DELETE /project/hourlyRates/deleteByProjectIds`
 Delete project hourly rates by project id.
 
+Query params: `ids` **(required)**, `date` **(required)**
+
 ### `DELETE /project/hourlyRates/list`
 Delete project hourly rates.
+
+Query params: `ids` **(required)**
 
 ### `POST /project/hourlyRates/list`
 Create multiple project hourly rates.
@@ -1362,6 +1419,8 @@ Create new project specific rate.
 ### `DELETE /project/hourlyRates/projectSpecificRates/list`
 Delete project specific rates.
 
+Query params: `ids` **(required)**
+
 ### `POST /project/hourlyRates/projectSpecificRates/list`
 Create multiple new project specific rates.
 
@@ -1381,6 +1440,8 @@ Body: `ProjectSpecificRate` (see above)
 
 ### `PUT /project/hourlyRates/updateOrAddHourRates`
 Update or add the same project hourly rate from project overview.
+
+Query params: `ids` **(required)**
 
 **HourlyRate** writable fields:
   - `startDate`: string
@@ -1402,8 +1463,12 @@ Body: `ProjectHourlyRate` (see above)
 ### `POST /project/import`
 Upload project import file.
 
+Query params: `fileFormat` **(required)**
+
 ### `DELETE /project/list`
 [BETA] Delete projects.
+
+Query params: `ids` **(required)**
 
 ### `POST /project/list`
 [BETA] Register new projects. Multiple projects for different users can be sent in the same request.
@@ -1417,7 +1482,7 @@ Find project by number.
 ### `GET /project/orderline`
 [BETA] Find all order lines for project.
 
-Query params: `projectId`, `isBudget`
+Query params: `projectId` **(required)**, `isBudget`
 
 ### `POST /project/orderline`
 [BETA] Create order line. When creating several order lines, use /list for better performance.
@@ -1448,7 +1513,7 @@ Query params: `projectId`, `isBudget`
 ### `GET /project/orderline/orderLineTemplate`
 [BETA] Get order line template from project and product
 
-Query params: `projectId`, `productId`
+Query params: `projectId` **(required)**, `productId` **(required)**
 
 ### `GET /project/orderline/query`
 [BETA] Wildcard search.
@@ -1477,6 +1542,8 @@ Body: `ProjectOrderLine` (see above)
 ### `DELETE /project/participant/list`
 [BETA] Delete project participants.
 
+Query params: `ids` **(required)**
+
 ### `POST /project/participant/list`
 [BETA] Add new project participant. Multiple project participants can be sent in the same request.
 
@@ -1504,6 +1571,8 @@ Add project activity.
 ### `DELETE /project/projectActivity/list`
 Delete project activities
 
+Query params: `ids` **(required)**
+
 ### `DELETE /project/projectActivity/{id}`
 Delete project activity
 
@@ -1513,7 +1582,7 @@ Find project activity by id
 ### `GET /project/resourcePlanBudget`
 Get resource plan entries in the specified period.
 
-Query params: `projectId`, `periodStart`, `periodEnd`, `periodType`
+Query params: `projectId`, `periodStart` **(required)**, `periodEnd` **(required)**, `periodType` **(required)**
 
 ### `GET /project/settings`
 Get project settings of logged in company.
@@ -1578,7 +1647,7 @@ Update project settings for company
 ### `GET /project/subcontract`
 Find project sub-contracts corresponding with sent data.
 
-Query params: `projectId`
+Query params: `projectId` **(required)**
 
 ### `POST /project/subcontract`
 Add new project sub-contract.
@@ -1613,7 +1682,7 @@ Body: `ProjectSubContract` (see above)
 ### `GET /project/task`
 Find all tasks for project.
 
-Query params: `projectId`
+Query params: `projectId` **(required)**
 
 ### `GET /project/template/{id}`
 Get project template by ID.
@@ -1635,27 +1704,27 @@ Get the budget status for the project period
 ### `GET /project/{id}/period/hourlistReport`
 Find hourlist report by project period.
 
-Query params: `dateFrom`, `dateTo`
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `GET /project/{id}/period/invoiced`
 Find invoiced info by project period.
 
-Query params: `dateFrom`, `dateTo`
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `GET /project/{id}/period/invoicingReserve`
 Find invoicing reserve by project period.
 
-Query params: `dateFrom`, `dateTo`
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `GET /project/{id}/period/monthlyStatus`
 Find overall status by project period.
 
-Query params: `dateFrom`, `dateTo`
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**
 
 ### `GET /project/{id}/period/overallStatus`
 Find overall status by project period.
 
-Query params: `dateFrom`, `dateTo`
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**
 
 ---
 
@@ -1668,6 +1737,9 @@ Query params: `employeeId`, `departmentId`, `projectId`, `projectManagerId`, `de
 
 ### `POST /travelExpense`
 Create travel expense.
+
+**Note:** Dates (`departureDate`, `returnDate`) go inside nested `travelDetails`, NOT at top level.
+Minimum: `{"employee":{"id":X},"travelDetails":{"departureDate":"...","returnDate":"...","isDayTrip":true}}`
 
 **TravelExpense** writable fields:
   - `attestationSteps`: [AttestationStep]
@@ -1705,8 +1777,12 @@ Approve travel expenses.
 ### `PUT /travelExpense/:copy`
 Copy travel expense.
 
+Query params: `id` **(required)**
+
 ### `PUT /travelExpense/:createVouchers`
 Create vouchers
+
+Query params: `date` **(required)**
 
 ### `PUT /travelExpense/:deliver`
 Deliver travel expenses.
@@ -1726,6 +1802,8 @@ Query params: `travelExpenseId`, `rateTypeId`, `rateCategoryId`, `rateFrom`, `ra
 
 ### `POST /travelExpense/accommodationAllowance`
 Create accommodation allowance.
+
+**Note:** `location` is secretly required.
 
 **AccommodationAllowance** writable fields:
   - `travelExpense`: TravelExpense
@@ -1756,6 +1834,8 @@ Query params: `travelExpenseId`, `vatTypeId`, `currencyId`, `rateFrom`, `rateTo`
 
 ### `POST /travelExpense/cost`
 Create cost.
+
+**Note:** Use `amountCurrencyIncVat` for the amount, NOT `amount` (that field doesn't exist on POST).
 
 **Cost** writable fields:
   - `travelExpense`: TravelExpense
@@ -1806,6 +1886,8 @@ Create participant on cost.
 ### `POST /travelExpense/costParticipant/createCostParticipantAdvanced`
 Create participant on cost using explicit parameters
 
+Query params: `costId` **(required)**, `employeeId` **(required)**
+
 ### `DELETE /travelExpense/costParticipant/list`
 Delete cost participants.
 
@@ -1845,6 +1927,8 @@ Query params: `travelExpenseId`, `rateTypeId`, `rateCategoryId`, `kmFrom`, `kmTo
 
 ### `POST /travelExpense/mileageAllowance`
 Create mileage allowance.
+
+**Note:** Passenger supplement is a SEPARATE mileage entry using rate category 744, not a boolean field.
 
 **MileageAllowance** writable fields:
   - `travelExpense`: TravelExpense
@@ -1918,6 +2002,9 @@ Query params: `travelExpenseId`, `rateTypeId`, `rateCategoryId`, `overnightAccom
 ### `POST /travelExpense/perDiemCompensation`
 Create per diem compensation.
 
+**Note:** `location` is secretly required. `count` is number of days (integer), NOT a date range.
+`overnightAccommodation`: e.g. `"HOTEL"`, `"NONE"`.
+
 **PerDiemCompensation** writable fields:
   - `travelExpense`: TravelExpense
   - `rateType`: TravelExpenseRate
@@ -1925,7 +2012,7 @@ Create per diem compensation.
   - `countryCode`: string
   - `travelExpenseZoneId`: integer(int32) — Optional travel expense zone id. If not specified, the value from field zone ...
   - `overnightAccommodation`: string — Set what sort of accommodation was had overnight.
-  - `location`: string
+  - `location`: string — **secretly required.**
   - `address`: string
   - `count`: integer(int32)
   - `rate`: number
