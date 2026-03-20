@@ -8,9 +8,10 @@ set -euo pipefail
 
 run() {
     local num="$1"; shift
+    local label="$1"; shift
     echo ""
     echo "=========================================="
-    echo "  EXPERIMENT $num: $1"
+    echo "  EXPERIMENT $num: $label"
     echo "=========================================="
     uv run python -m norgesgruppen.experiment "$@"
 }
