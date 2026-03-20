@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 import responses
+from requests.exceptions import HTTPError
 
 from astar_island.client import BASE_URL
 from astar_island.client import MAP_SIZE
@@ -29,7 +30,7 @@ class TestGetRounds:
     def test_raises_on_401(self, client: AstarIslandClient) -> None:
         responses.get(f"{BASE_URL}/rounds", json={"error": "unauthorized"}, status=401)
 
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPError):
             client.get_rounds()
 
 
@@ -47,7 +48,7 @@ class TestGetRound:
     def test_raises_on_404(self, client: AstarIslandClient) -> None:
         responses.get(f"{BASE_URL}/rounds/999", json={"error": "not found"}, status=404)
 
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPError):
             client.get_round(round_id=999)
 
 
@@ -92,7 +93,7 @@ class TestSimulate:
     def test_raises_on_budget_exceeded(self, client: AstarIslandClient) -> None:
         responses.post(f"{BASE_URL}/simulate", json={"error": "budget exceeded"}, status=429)
 
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPError):
             client.simulate(round_id=1, seed_index=0, x=0, y=0)
 
 
