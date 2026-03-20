@@ -62,8 +62,8 @@ def convert_coco_to_yolo(
     Returns:
         Path to generated dataset.yaml
     """
-    annotations_path = COCO_DIR / "annotations.json"
-    images_dir = COCO_DIR / "images"
+    annotations_path = COCO_DIR / "train" / "annotations.json"
+    images_dir = COCO_DIR / "train" / "images"
 
     with annotations_path.open() as f:
         coco = json.load(f)
@@ -87,7 +87,7 @@ def convert_coco_to_yolo(
     image_ids = sorted(images_by_id.keys())
     random.seed(seed)
     random.shuffle(image_ids)
-    val_count = max(1, int(len(image_ids) * val_fraction))
+    val_count = 0 if val_fraction <= 0 else max(1, int(len(image_ids) * val_fraction))
     val_ids = set(image_ids[:val_count])
     train_ids = set(image_ids[val_count:])
 
@@ -122,13 +122,15 @@ def convert_coco_to_yolo(
 
     # Write dataset.yaml
     yaml_path = YOLO_DIR / "dataset.yaml"
-    yaml_content = (
-        f"path: {YOLO_DIR.resolve()}\n"
-        f"train: train/images\n"
-        f"val: val/images\n"
-        f"nc: {num_classes}\n"
-        f"names: {class_names}\n"
-    )
+    yaml_lines = [
+        f"path: {YOLO_DIR.resolve()}",
+        "train: train/images",
+        "val: val/images" if val_ids else "val: train/images",
+        f"nc: {num_classes}",
+        f"names: {class_names}",
+        "",
+    ]
+    yaml_content = "\n".join(yaml_lines)
     yaml_path.write_text(yaml_content)
 
     LOGGER.info("YOLO dataset created at %s", YOLO_DIR)
