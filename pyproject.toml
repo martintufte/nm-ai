@@ -33,6 +33,8 @@ line-length = 100
 # operate a blacklist, rather than a whitelist.
 select = ["ALL"]
 ignore = [
+    "PT011",    # pytest.raises need match statements
+
     # Rules that are intentionally disabled because we don't want them
     "TD003",    # missing-todo-link: Requiring issue tracker links for TODOs would be a lot of work
     "TRY203",   # raise-without-from-inside-except: Used to inform docstring about raises
@@ -78,3 +80,9 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "responses>=0.26.0",
+]
