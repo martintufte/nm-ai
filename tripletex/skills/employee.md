@@ -12,7 +12,7 @@
 | `userType` | **Yes (hidden)** | Not marked required in spec. Error if omitted: "Brukertype kan ikke være '0' eller tom." Values: `"NO_ACCESS"` = no system login, cannot access Tripletex; `"STANDARD"` = limited system access, can log in (requires `email`); `"EXTENDED"` = full system access, can log in (requires `email`). |
 | `department` | **Yes (hidden)** | Not marked required in spec. Must be `{"id": DEPT_ID}`. Error: "department.id: Feltet må fylles ut." |
 | `email` | Conditional | Required for STANDARD/EXTENDED. Not required for NO_ACCESS. Error: "Må angis for Tripletex-brukere." |
-| `dateOfBirth` | No on POST | **Required on PUT** — see Update section |
+| `dateOfBirth` | No on POST | **Required when inlining `employments`** on POST. NOT required on PUT despite earlier documentation. |
 | `startDate` | **Not a field** | Belongs to Employment, not Employee. Including it errors: "Feltet eksisterer ikke i objektet." Inline via `employments` array instead. |
 
 Other accepted optional fields: `employeeNumber`, `phoneNumberMobile`, `phoneNumberMobileCountry` (Country ref), `phoneNumberHome`, `phoneNumberWork`, `address` (as `{"addressLine1":"...","postalCode":"...","city":"..."}`), `nationalIdentityNumber`, `dnumber` (Norwegian D-number), `internationalId` (InternationalId ref), `bankAccountNumber`, `iban`, `bic` (SWIFT code), `creditorBankCountryId` (int32), `usesAbroadPayment` (boolean — domestic vs abroad remittance), `comments`, `isContact` (boolean — external contact, not employee), `employeeCategory` (EmployeeCategory ref), `holidayAllowanceEarned` (HolidayAllowanceEarned ref).
@@ -20,7 +20,7 @@ Other accepted optional fields: `employeeNumber`, `phoneNumberMobile`, `phoneNum
 ## Call-saving Patterns
 
 - **POST returns the full created object** with `id`, `version`, and all fields — no need to GET after creating.
-- **Inline employments on POST**: include `"employments":[{"startDate":"YYYY-MM-DD"}]` in the employee POST body to create employee + employment in 1 call instead of 2. Employment is NOT auto-created if you omit the array.
+- **Inline employments on POST**: include `"employments":[{"startDate":"YYYY-MM-DD"}]` in the employee POST body to create employee + employment in 1 call instead of 2. Employment is NOT auto-created if you omit the array. **Note:** `dateOfBirth` becomes required when inlining employments.
 - **Inline employment details**: `employmentDetails` can be nested inside each employment object in the `employments` array, creating employee + employment + details in a single call.
 - **Cache department ID**: if you just created a department, reuse its returned ID directly — don't GET /department to look it up.
 - **PUT needs a GET first** (for `version`), but if you just created the employee, reuse `id` and `version` from the POST response.
@@ -70,18 +70,17 @@ POST /employee
 
 ## Update — PUT /employee/{id}
 
-Requires `id`, `version`, and **`dateOfBirth`** in the body (dateOfBirth is required on PUT but not POST).
+Requires `id` and `version` in the body.
 ```json
 PUT /employee/{id}
 {
   "id":X, "version":V,
   "firstName":"X", "lastName":"Y",
   "userType":"NO_ACCESS",
-  "department":{"id":DEPT_ID},
-  "dateOfBirth":"YYYY-MM-DD"
+  "department":{"id":DEPT_ID}
 }
 ```
-Error if dateOfBirth omitted: "dateOfBirth: Feltet må fylles ut."
+<!-- Corrected: dateOfBirth is NOT required on PUT. Verified against sandbox 2026-03-20. -->
 
 If you just created the employee, reuse `id` and `version` from the POST response — skip the GET.
 

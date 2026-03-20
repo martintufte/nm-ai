@@ -217,6 +217,8 @@ class SolveRequest(BaseModel):
 
 class SolveResponse(BaseModel):
     status: str
+    api_calls: int | None = None
+    errors: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -537,14 +539,18 @@ async def solve(request: SolveRequest) -> SolveResponse:
         logger.warning("ANTHROPIC_API_KEY is not set, skipping LLM agent loop")
         return SolveResponse(status="completed")
 
-    await asyncio.to_thread(
+    tracker = await asyncio.to_thread(
         parse_and_execute_task,
         task_prompt=request.prompt,
         client=client,
         files=request.files,
     )
 
-    return SolveResponse(status="completed")
+    return SolveResponse(
+        status="completed",
+        api_calls=tracker.api_calls,
+        errors=tracker.errors,
+    )
 
 
 @app.get("/health")

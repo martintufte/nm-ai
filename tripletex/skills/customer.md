@@ -14,7 +14,7 @@ All other fields optional: `organizationNumber`, `supplierNumber` (int32), `glob
 ## Call-saving Patterns
 
 - **POST returns full object** with `id`, `version`, all fields, and nested object IDs (including `postalAddress.id` even for name-only creation). Cache everything — no GET needed.
-- **Address IDs returned on POST**: even a minimal `{"name":"X"}` POST returns `postalAddress`, `physicalAddress`, `deliveryAddress` with their `id` and `version`. Reuse these for subsequent PUT updates without an extra GET.
+- **Address updates don't need old address IDs**: on PUT, include `postalAddress` without `id`/`version` — Tripletex creates a new address object replacing the old one. No need to GET or track address IDs.
 - If creating a customer just to use in an invoice, pass the returned `id` directly into the invoice — don't re-query.
 
 ## Minimum Payload
@@ -38,15 +38,16 @@ PUT /customer/{id}
 ```
 
 ### Updating nested addresses
-Nested Address objects need their own `id`/`version` or the update is **silently ignored**.
+<!-- Corrected: address without id/version is NOT silently ignored — it creates a new address object. Verified 2026-03-20. -->
+Including `postalAddress` in a PUT **without** `id`/`version` creates a **new address object** (replacing the old one). This works and is the simplest approach:
 ```json
 PUT /customer/{id}
 {
   "id": CUST_ID, "version": CUST_V,
-  "postalAddress": {"id": ADDR_ID, "version": ADDR_V, "addressLine1": "Storgata 45", "postalCode": "0182", "city": "Oslo"}
+  "postalAddress": {"addressLine1": "Storgata 45", "postalCode": "0182", "city": "Oslo"}
 }
 ```
-Address `id`/`version` come from the POST response (version starts at 0). No standalone `/address` endpoint exists.
+Do NOT try to reuse an old address `id` — Tripletex rejects reusing address IDs from previous objects with: "Eksisterende adresser kan ikke gjenbrukes på andre objekter."
 
 ## Delete
 `DELETE /customer/{id}` → 204 (succeeds if no invoice references the customer).

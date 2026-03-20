@@ -50,17 +50,25 @@ Vouchers are the core accounting documents. Creating a voucher also creates its 
 ### POST /ledger/voucher
 Voucher writable fields: `date` (string), `description`, `voucherType` (VoucherType ref), `reverseVoucher` (Voucher ref), `postings` ([Posting] — inline), `document` (Document), `attachment` (Document), `externalVoucherNumber` (string — max 70 chars), `ediDocument` (Document), `vendorInvoiceNumber` (string).
 
+<!-- Corrected: use amountGross/amountGrossCurrency, row>0, and vatType for vat-locked accounts. Verified 2026-03-20. -->
 ```json
 POST /ledger/voucher
 {
   "date": "YYYY-MM-DD",
   "description": "Payment",
   "postings": [
-    {"date": "YYYY-MM-DD", "account": {"id": DEBIT_ACCT}, "amount": 1000.0},
-    {"date": "YYYY-MM-DD", "account": {"id": CREDIT_ACCT}, "amount": -1000.0}
+    {"date": "YYYY-MM-DD", "account": {"id": REVENUE_ACCT}, "vatType": {"id": 3}, "amountGross": 1000.0, "amountGrossCurrency": 1000.0, "row": 1},
+    {"date": "YYYY-MM-DD", "account": {"id": EXPENSE_ACCT}, "vatType": {"id": 0}, "amountGross": -1000.0, "amountGrossCurrency": -1000.0, "row": 2}
   ]
 }
 ```
+
+**Posting gotchas:**
+- Use `amountGross` + `amountGrossCurrency` (NOT `amount` — that stores net/ex-VAT and may zero out)
+- Set `row` to 1, 2, etc. — row 0 is reserved for system-generated postings (auto VAT lines)
+- Include `vatType` on each posting — accounts with `vatLocked=true` require the matching vatType or POST fails
+- Use revenue (3xxx) and expense (6xxx+) accounts — asset accounts (1xxx) may be system-locked
+- The API auto-generates VAT postings (row=0) based on account VAT settings
 
 ### GET /ledger/voucher
 Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(required)**, `dateTo` **(required)**

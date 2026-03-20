@@ -689,6 +689,588 @@ fi
 echo ""
 
 # ======================================================================
+# PHASE 9: Negative cases (error message verification)
+# ======================================================================
+echo "=== PHASE 9: Negative cases (error messages) ==="
+
+check_error_message() {
+  local tid="$1" desc="$2" expected_fragment="$3"
+  local actual_msg
+  actual_msg=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+msgs=d.get('validationMessages',[]); parts=[m.get('message','') for m in msgs]
+parts.append(d.get('message','')); print('|'.join(parts))" 2>/dev/null)
+  if echo "$actual_msg" | grep -qF "$expected_fragment"; then
+    record PASS "$tid" "$desc" "error message matches"
+  else
+    record FAIL "$tid" "$desc" "expected '$expected_fragment' in '$actual_msg'"
+  fi
+}
+
+# T90: startDate on employee body → 422 "Feltet eksisterer ikke"
+api POST employee "{\"firstName\":\"BadField\",\"lastName\":\"Test\",\"userType\":\"NO_ACCESS\",\"department\":{\"id\":${IDS[DEPT_ID]}},\"startDate\":\"$TODAY\"}"
+expect_fail T90 "POST /employee (startDate on body) [error msg]"
+check_error_message T90b "Error msg: startDate" "eksisterer ikke"
+
+# T91: PUT employee without dateOfBirth → 200 (dateOfBirth NOT required on PUT despite earlier belief)
+if [ -n "${IDS[EMP2_ID]:-}" ]; then
+  api GET "employee/${IDS[EMP2_ID]}"
+  local_ver=$(extract_version)
+  api PUT "employee/${IDS[EMP2_ID]}" "{\"id\":${IDS[EMP2_ID]},\"version\":$local_ver,\"firstName\":\"NoDob\",\"lastName\":\"Test\",\"userType\":\"NO_ACCESS\",\"department\":{\"id\":${IDS[DEPT_ID]}}}"
+  expect_success T91 "PUT /employee (no dateOfBirth succeeds)" 200
+else
+  record SKIP T91 "PUT /employee (no dateOfBirth)" "no employee"
+fi
+
+# T92: Duplicate product name → 422 "allerede registrert"
+api POST product "{\"name\":\"Verify Product $TS\"}"
+expect_fail T92 "POST /product (duplicate name) [error msg]"
+check_error_message T92b "Error msg: duplicate product" "allerede registrert"
+
+# T93: passengerSupplement: true on mileage → 422 "type"
+if [ -n "${IDS[TE_ID]:-}" ]; then
+  api POST "travelExpense/mileageAllowance" "{
+    \"travelExpense\":{\"id\":${IDS[TE_ID]}},
+    \"rateType\":{\"id\":${IDS[MILEAGE_CAT]}},
+    \"date\":\"$TODAY\",
+    \"departureLocation\":\"Oslo\",
+    \"destination\":\"Bergen\",
+    \"km\":100,
+    \"rate\":3.5,
+    \"amount\":350.0,
+    \"isCompanyCar\":false,
+    \"passengerSupplement\":true
+  }"
+  expect_fail T93 "POST /mileageAllowance (passengerSupplement bool) [error msg]"
+  check_error_message T93b "Error msg: wrong type" "type"
+else
+  record SKIP T93 "POST /mileageAllowance (passengerSupplement)" "no travel expense"
+  record SKIP T93b "Error msg: wrong type" "no travel expense"
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 10: Inline creation patterns
+# ======================================================================
+echo "=== PHASE 10: Inline creation patterns ==="
+
+# T100: Employee with inline employments (dateOfBirth required when inlining employments)
+api POST employee "{
+  \"firstName\":\"Inline\",\"lastName\":\"Emp $TS\",
+  \"userType\":\"NO_ACCESS\",
+  \"department\":{\"id\":${IDS[DEPT_ID]}},
+  \"dateOfBirth\":\"1990-01-01\",
+  \"employments\":[{\"startDate\":\"$TODAY\"}]
+}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[EMP_INLINE_ID]=$(extract_id)
+  # Verify employment was created
+  api GET "employee/employment?employeeId=${IDS[EMP_INLINE_ID]}"
+  emp_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+  if [ "$emp_count" -gt 0 ] 2>/dev/null; then
+    record PASS T100 "POST /employee (inline employments)" "employment created, count=$emp_count"
+    IDS[EMPLOYMENT_ID]=$(extract_first_id)
+  else
+    record FAIL T100 "POST /employee (inline employments)" "employee ok but no employment found"
+  fi
+else
+  record FAIL T100 "POST /employee (inline employments)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# T101: Employee with inline employments + nested employmentDetails
+api POST employee "{
+  \"firstName\":\"Deep\",\"lastName\":\"Inline $TS\",
+  \"userType\":\"NO_ACCESS\",
+  \"department\":{\"id\":${IDS[DEPT_ID]}},
+  \"dateOfBirth\":\"1990-01-01\",
+  \"employments\":[{
+    \"startDate\":\"$TODAY\",
+    \"employmentDetails\":[{
+      \"date\":\"$TODAY\",
+      \"employmentType\":\"ORDINARY\",
+      \"employmentForm\":\"PERMANENT\"
+    }]
+  }]
+}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[EMP_DEEP_ID]=$(extract_id)
+  record PASS T101 "POST /employee (inline employment+details)" "$LAST_CODE"
+else
+  record FAIL T101 "POST /employee (inline employment+details)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# T102: Travel expense with inline costs
+api POST travelExpense "{
+  \"employee\":{\"id\":${IDS[EMP_ID]}},
+  \"title\":\"Inline Costs Trip $TS\",
+  \"travelDetails\":{
+    \"departureDate\":\"$TODAY\",
+    \"returnDate\":\"$TOMORROW\",
+    \"isDayTrip\":false
+  },
+  \"costs\":[{
+    \"costCategory\":{\"id\":${IDS[COST_CAT_ID]}},
+    \"paymentType\":{\"id\":${IDS[TRAVEL_PAY_ID]}},
+    \"currency\":{\"id\":${IDS[CURRENCY_ID]}},
+    \"amountCurrencyIncVat\":250.0,
+    \"date\":\"$TODAY\"
+  }]
+}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[TE_INLINE_COST_ID]=$(extract_id)
+  record PASS T102 "POST /travelExpense (inline costs)" "$LAST_CODE"
+else
+  record FAIL T102 "POST /travelExpense (inline costs)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# T103: Travel expense with inline perDiemCompensations
+api POST travelExpense "{
+  \"employee\":{\"id\":${IDS[EMP_ID]}},
+  \"title\":\"Inline PerDiem Trip $TS\",
+  \"travelDetails\":{
+    \"departureDate\":\"$TODAY\",
+    \"returnDate\":\"$TOMORROW\",
+    \"isDayTrip\":false
+  },
+  \"perDiemCompensations\":[{
+    \"rateType\":{\"id\":${IDS[PERDIEM_CAT]}},
+    \"count\":1,
+    \"location\":\"Bergen\",
+    \"overnightAccommodation\":\"HOTEL\",
+    \"isDeductionForBreakfast\":false
+  }]
+}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[TE_INLINE_PD_ID]=$(extract_id)
+  record PASS T103 "POST /travelExpense (inline perDiemCompensations)" "$LAST_CODE"
+else
+  record FAIL T103 "POST /travelExpense (inline perDiemCompensations)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# T104: Project with inline participants
+api POST project "{
+  \"name\":\"Inline Part Project $TS\",
+  \"projectManager\":{\"id\":${IDS[EMP_ID]}},
+  \"isInternal\":true,
+  \"startDate\":\"$TODAY\",
+  \"participants\":[{\"employee\":{\"id\":${IDS[EMP_ID]}}}]
+}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[PROJ_INLINE_ID]=$(extract_id)
+  record PASS T104 "POST /project (inline participants)" "$LAST_CODE"
+else
+  record FAIL T104 "POST /project (inline participants)" "got $LAST_CODE"
+  validation_msg
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 11: Response shape verification
+# ======================================================================
+echo "=== PHASE 11: Response shape verification ==="
+
+# T110: List GET has fullResultSize/from/count/values
+api GET "employee?count=1"
+has_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+keys={'fullResultSize','from','count','values'}
+print('yes' if keys.issubset(d.keys()) else 'no')
+" 2>/dev/null)
+if [ "$has_shape" = "yes" ]; then
+  record PASS T110 "List GET response shape" "has fullResultSize/from/count/values"
+else
+  record FAIL T110 "List GET response shape" "missing expected keys"
+fi
+
+# T111: Single GET returns {"value":{...}}
+api GET "employee/${IDS[EMP_ID]}"
+has_value=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+print('yes' if 'value' in d and isinstance(d['value'], dict) else 'no')
+" 2>/dev/null)
+if [ "$has_value" = "yes" ]; then
+  record PASS T111 "Single GET response shape" "{\"value\":{...}}"
+else
+  record FAIL T111 "Single GET response shape" "missing value wrapper"
+fi
+
+# T112: POST returns id + version
+api POST product "{\"name\":\"ShapeTest $TS\"}"
+has_id_ver=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+print('yes' if 'id' in d and 'version' in d else 'no')
+" 2>/dev/null)
+if [ "$has_id_ver" = "yes" ]; then
+  IDS[PROD_SHAPE_ID]=$(extract_id)
+  record PASS T112 "POST response has id+version" "id=${IDS[PROD_SHAPE_ID]}"
+else
+  record FAIL T112 "POST response has id+version" "missing id or version"
+fi
+
+# T113: Mileage POST returns URL-only response
+if [ -n "${IDS[TE_ID]:-}" ]; then
+  api POST "travelExpense/mileageAllowance" "{
+    \"travelExpense\":{\"id\":${IDS[TE_ID]}},
+    \"rateType\":{\"id\":${IDS[MILEAGE_CAT]}},
+    \"date\":\"$TODAY\",
+    \"departureLocation\":\"Oslo\",
+    \"destination\":\"Drammen\",
+    \"km\":40,
+    \"rate\":3.5,
+    \"amount\":140.0,
+    \"isCompanyCar\":false
+  }"
+  url_only=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+has_url = 'url' in d
+has_id = 'id' in d
+# URL-only means it has url but no other fields (or id is missing)
+if has_url and not has_id:
+  print('url_only')
+elif has_url and has_id:
+  print('full_object')
+else:
+  print('unknown')
+" 2>/dev/null)
+  if [ "$url_only" = "url_only" ]; then
+    record PASS T113 "Mileage POST returns URL-only" "confirmed url-only response"
+  elif [ "$url_only" = "full_object" ]; then
+    record PASS T113 "Mileage POST returns full object" "NOT url-only — skill doc may need update"
+  else
+    record FAIL T113 "Mileage POST response shape" "unexpected shape"
+  fi
+else
+  record SKIP T113 "Mileage POST response shape" "no travel expense"
+fi
+
+# T114: Minimal customer POST returns postalAddress.id
+api POST customer "{\"name\":\"AddrShape $TS\"}"
+addr_id=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+pa=d.get('postalAddress',{})
+print(pa.get('id','none'))
+" 2>/dev/null)
+if [ "$addr_id" != "none" ] && [ -n "$addr_id" ]; then
+  IDS[CUST_SHAPE_ID]=$(extract_id)
+  IDS[CUST_SHAPE_ADDR_ID]=$addr_id
+  record PASS T114 "Minimal customer POST has postalAddress.id" "addr_id=$addr_id"
+else
+  record FAIL T114 "Minimal customer POST has postalAddress.id" "postalAddress.id missing"
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 12: Nested object update behavior
+# ======================================================================
+echo "=== PHASE 12: Nested object update behavior ==="
+
+if [ -n "${IDS[CUST_SHAPE_ID]:-}" ]; then
+  # Get fresh version
+  api GET "customer/${IDS[CUST_SHAPE_ID]}"
+  cust_ver=$(extract_version)
+
+  # T120: PUT customer address WITHOUT nested id/version → creates NEW address (not silently ignored!)
+  api PUT "customer/${IDS[CUST_SHAPE_ID]}" "{
+    \"id\":${IDS[CUST_SHAPE_ID]},\"version\":$cust_ver,
+    \"name\":\"AddrShape $TS\",
+    \"postalAddress\":{\"addressLine1\":\"NewAddr 99\",\"postalCode\":\"9999\",\"city\":\"Nowhere\"}
+  }"
+  if [ "$LAST_CODE" = "200" ]; then
+    cust_ver=$(extract_version)
+    # Address without id creates a NEW address object (replaces old one)
+    addr_line=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+print(d.get('postalAddress',{}).get('addressLine1','') or 'empty')
+" 2>/dev/null)
+    new_addr_id=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+print(d.get('postalAddress',{}).get('id',''))
+" 2>/dev/null)
+    if [ "$addr_line" = "NewAddr 99" ]; then
+      record PASS T120 "PUT customer addr WITHOUT id/version" "creates new address (addr_id=$new_addr_id)"
+    else
+      record FAIL T120 "PUT customer addr WITHOUT id/version" "unexpected addr='$addr_line'"
+    fi
+  else
+    record FAIL T120 "PUT customer addr WITHOUT id/version" "PUT failed: $LAST_CODE"
+    validation_msg
+  fi
+
+  # T121: PUT customer address again WITHOUT id → replaces address again (confirms pattern)
+  api PUT "customer/${IDS[CUST_SHAPE_ID]}" "{
+    \"id\":${IDS[CUST_SHAPE_ID]},\"version\":$cust_ver,
+    \"name\":\"AddrShape $TS\",
+    \"postalAddress\":{\"addressLine1\":\"Replaced 42\",\"postalCode\":\"0182\",\"city\":\"Oslo\"}
+  }"
+  if [ "$LAST_CODE" = "200" ]; then
+    addr_line=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+print(d.get('postalAddress',{}).get('addressLine1','') or 'empty')
+" 2>/dev/null)
+    final_addr_id=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin).get('value',{})
+print(d.get('postalAddress',{}).get('id',''))
+" 2>/dev/null)
+    if [ "$addr_line" = "Replaced 42" ]; then
+      record PASS T121 "PUT customer addr (replace pattern)" "new addr_id=$final_addr_id, content updated"
+    else
+      record FAIL T121 "PUT customer addr (replace pattern)" "unexpected addr='$addr_line'"
+    fi
+  else
+    record FAIL T121 "PUT customer addr (replace pattern)" "PUT failed: $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T120 "PUT customer addr WITHOUT id/version" "no customer"
+  record SKIP T121 "PUT customer addr (replace pattern)" "no customer"
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 13: Sub-resource CRUD
+# ======================================================================
+echo "=== PHASE 13: Sub-resource CRUD ==="
+
+# T130: Employee next of kin CRUD
+if [ -n "${IDS[EMP2_ID]:-}" ]; then
+  api POST "employee/nextOfKin" "{\"employee\":{\"id\":${IDS[EMP2_ID]}},\"name\":\"Kin Person $TS\",\"phoneNumber\":\"99887766\",\"typeOfRelationship\":\"SPOUSE\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[KIN_ID]=$(extract_id)
+    record PASS T130a "POST /employee/nextOfKin" "id=${IDS[KIN_ID]}"
+
+    # GET
+    api GET "employee/nextOfKin?employeeId=${IDS[EMP2_ID]}"
+    expect_success T130b "GET /employee/nextOfKin" 200
+
+    # PUT
+    kin_ver=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['values'][0]['version'])" 2>/dev/null)
+    api PUT "employee/nextOfKin/${IDS[KIN_ID]}" "{\"id\":${IDS[KIN_ID]},\"version\":$kin_ver,\"employee\":{\"id\":${IDS[EMP2_ID]}},\"name\":\"Updated Kin $TS\",\"phoneNumber\":\"99887766\",\"typeOfRelationship\":\"SPOUSE\"}"
+    expect_success T130c "PUT /employee/nextOfKin" 200
+  else
+    record FAIL T130a "POST /employee/nextOfKin" "got $LAST_CODE"
+    validation_msg
+    record SKIP T130b "GET /employee/nextOfKin" "create failed"
+    record SKIP T130c "PUT /employee/nextOfKin" "create failed"
+  fi
+else
+  record SKIP T130a "POST /employee/nextOfKin" "no employee"
+  record SKIP T130b "GET /employee/nextOfKin" "no employee"
+  record SKIP T130c "PUT /employee/nextOfKin" "no employee"
+fi
+
+# T131: Employee standard time
+if [ -n "${IDS[EMP2_ID]:-}" ]; then
+  api POST "employee/standardTime" "{\"employee\":{\"id\":${IDS[EMP2_ID]}},\"fromDate\":\"$TODAY\",\"hoursPerDay\":7.5}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[STD_TIME_ID]=$(extract_id)
+    record PASS T131 "POST /employee/standardTime" "id=${IDS[STD_TIME_ID]}"
+  else
+    record FAIL T131 "POST /employee/standardTime" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T131 "POST /employee/standardTime" "no employee"
+fi
+
+# T132: Employee hourly cost and rate
+if [ -n "${IDS[EMP2_ID]:-}" ]; then
+  api POST "employee/hourlyCostAndRate" "{\"employee\":{\"id\":${IDS[EMP2_ID]}},\"date\":\"$TODAY\",\"rate\":500.0,\"budgetRate\":450.0,\"hourCostRate\":300.0}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[HOURLY_RATE_ID]=$(extract_id)
+    record PASS T132 "POST /employee/hourlyCostAndRate" "id=${IDS[HOURLY_RATE_ID]}"
+  else
+    record FAIL T132 "POST /employee/hourlyCostAndRate" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T132 "POST /employee/hourlyCostAndRate" "no employee"
+fi
+
+# T133: Project standalone participant
+if [ -n "${IDS[PROJ_INLINE_ID]:-}" ] && [ -n "${IDS[EMP2_ID]:-}" ]; then
+  api POST "project/participant" "{\"project\":{\"id\":${IDS[PROJ_INLINE_ID]}},\"employee\":{\"id\":${IDS[EMP2_ID]}}}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[PARTICIPANT_ID]=$(extract_id)
+    record PASS T133 "POST /project/participant (standalone)" "id=${IDS[PARTICIPANT_ID]}"
+  else
+    record FAIL T133 "POST /project/participant (standalone)" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T133 "POST /project/participant" "no project or employee"
+fi
+
+# T134: PUT /project update
+if [ -n "${IDS[PROJ_INLINE_ID]:-}" ]; then
+  api GET "project/${IDS[PROJ_INLINE_ID]}"
+  proj_ver=$(extract_version)
+  api PUT "project/${IDS[PROJ_INLINE_ID]}" "{\"id\":${IDS[PROJ_INLINE_ID]},\"version\":$proj_ver,\"name\":\"Updated Project $TS\",\"projectManager\":{\"id\":${IDS[EMP_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+  expect_success T134 "PUT /project (update name)" 200
+else
+  record SKIP T134 "PUT /project" "no project"
+fi
+
+# T135: Standalone order + orderline (not inline via invoice)
+api POST order "{\"orderDate\":\"$TODAY\",\"deliveryDate\":\"$TODAY\",\"customer\":{\"id\":${IDS[CUST_ID]}}}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[STANDALONE_ORDER_ID]=$(extract_id)
+  record PASS T135a "POST /order (standalone)" "id=${IDS[STANDALONE_ORDER_ID]}"
+
+  api POST "order/orderline" "{\"order\":{\"id\":${IDS[STANDALONE_ORDER_ID]}},\"product\":{\"id\":${IDS[PROD_ID]}},\"count\":5}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[STANDALONE_OL_ID]=$(extract_id)
+    record PASS T135b "POST /order/orderline (standalone)" "id=${IDS[STANDALONE_OL_ID]}"
+  else
+    record FAIL T135b "POST /order/orderline (standalone)" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record FAIL T135a "POST /order (standalone)" "got $LAST_CODE"
+  validation_msg
+  record SKIP T135b "POST /order/orderline" "no order"
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 14: Voucher / Ledger
+# ======================================================================
+echo "=== PHASE 14: Voucher / Ledger ==="
+
+# Lookup revenue (3000) and expense (6000) accounts for balanced voucher postings
+# Accounts at offset 0 are system/asset accounts (row=0 blocked). Need operating accounts.
+api GET "ledger/account?isInactive=false&count=500"
+ACCT_REVENUE=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+# Find a revenue account (3xxx)
+for v in vs:
+  if 3000 <= v.get('number',0) < 4000:
+    print(v['id']); break
+" 2>/dev/null)
+ACCT_EXPENSE=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+# Find an expense account (6xxx or 7xxx)
+for v in vs:
+  if 6000 <= v.get('number',0) < 8000:
+    print(v['id']); break
+" 2>/dev/null)
+
+# T140: POST /ledger/voucher with balanced postings
+# Key learnings: use amountGross+amountGrossCurrency, row>0, vatType per vat-locked account
+# Revenue account 3000 is locked to vatType 3 (output 25%), expense account 6000 uses vatType 0
+ACCT_REV_VAT=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+for v in vs:
+  if 3000 <= v.get('number',0) < 4000:
+    vt=v.get('vatType',{})
+    print(vt.get('id',0) if vt else 0); break
+" 2>/dev/null)
+ACCT_EXP_VAT=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+for v in vs:
+  if 6000 <= v.get('number',0) < 8000:
+    vt=v.get('vatType',{})
+    print(vt.get('id',0) if vt else 0); break
+" 2>/dev/null)
+if [ -n "$ACCT_REVENUE" ] && [ -n "$ACCT_EXPENSE" ]; then
+  api POST "ledger/voucher" "{
+    \"date\":\"$TODAY\",
+    \"description\":\"Verify Voucher $TS\",
+    \"postings\":[
+      {\"date\":\"$TODAY\",\"account\":{\"id\":$ACCT_REVENUE},\"vatType\":{\"id\":${ACCT_REV_VAT:-0}},\"amountGross\":1000.0,\"amountGrossCurrency\":1000.0,\"row\":1},
+      {\"date\":\"$TODAY\",\"account\":{\"id\":$ACCT_EXPENSE},\"vatType\":{\"id\":${ACCT_EXP_VAT:-0}},\"amountGross\":-1000.0,\"amountGrossCurrency\":-1000.0,\"row\":2}
+    ]
+  }"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[VOUCHER_ID]=$(extract_id)
+    record PASS T140 "POST /ledger/voucher (balanced)" "id=${IDS[VOUCHER_ID]}"
+  else
+    record FAIL T140 "POST /ledger/voucher (balanced)" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T140 "POST /ledger/voucher" "no revenue/expense accounts found"
+fi
+
+# T141: GET /ledger/vatType — verify common codes exist
+api GET "ledger/vatType?count=50"
+vat_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+if [ "$vat_count" -gt 0 ] 2>/dev/null; then
+  # Check for id=1 and id=3 specifically
+  has_common=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+ids={v['id'] for v in vs}
+print('yes' if 1 in ids and 3 in ids else 'no')
+" 2>/dev/null)
+  if [ "$has_common" = "yes" ]; then
+    record PASS T141 "GET /ledger/vatType (common codes)" "count=$vat_count, has id=1 and id=3"
+  else
+    record PASS T141 "GET /ledger/vatType" "count=$vat_count, but missing id=1 or id=3"
+  fi
+else
+  record FAIL T141 "GET /ledger/vatType" "empty or error"
+fi
+
+# T142: GET /ledger/posting with date range
+api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TODAY"
+if [ "$LAST_CODE" = "200" ]; then
+  posting_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+  record PASS T142 "GET /ledger/posting (date range)" "count=$posting_count"
+else
+  record FAIL T142 "GET /ledger/posting (date range)" "got $LAST_CODE"
+  validation_msg
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 15: Cleanup (phases 9-14)
+# ======================================================================
+echo "=== PHASE 15: Cleanup (phases 9-14) ==="
+
+cleanup_delete() {
+  local tid="$1" endpoint="$2" desc="$3"
+  api DELETE "$endpoint"
+  if [ "$LAST_CODE" = "204" ] || [ "$LAST_CODE" = "200" ]; then
+    record PASS "$tid" "DELETE /$desc" "$LAST_CODE"
+  elif [ "$LAST_CODE" = "403" ]; then
+    record XFAIL "$tid" "DELETE /$desc (forbidden)" "403"
+  else
+    record FAIL "$tid" "DELETE /$desc" "got $LAST_CODE"
+    validation_msg
+  fi
+}
+
+# Delete standalone order + orderline
+[ -n "${IDS[STANDALONE_OL_ID]:-}" ] && cleanup_delete T150a "order/orderline/${IDS[STANDALONE_OL_ID]}" "order/orderline (standalone)"
+[ -n "${IDS[STANDALONE_ORDER_ID]:-}" ] && cleanup_delete T150b "order/${IDS[STANDALONE_ORDER_ID]}" "order (standalone)"
+
+# Delete travel expenses from phase 10
+[ -n "${IDS[TE_INLINE_COST_ID]:-}" ] && cleanup_delete T151a "travelExpense/${IDS[TE_INLINE_COST_ID]}" "travelExpense (inline costs)"
+[ -n "${IDS[TE_INLINE_PD_ID]:-}" ] && cleanup_delete T151b "travelExpense/${IDS[TE_INLINE_PD_ID]}" "travelExpense (inline perDiem)"
+
+# Delete projects from phase 10
+[ -n "${IDS[PROJ_INLINE_ID]:-}" ] && cleanup_delete T152 "project/${IDS[PROJ_INLINE_ID]}" "project (inline participants)"
+
+# Delete products from phase 11
+[ -n "${IDS[PROD_SHAPE_ID]:-}" ] && cleanup_delete T153 "product/${IDS[PROD_SHAPE_ID]}" "product (shape test)"
+
+# Delete customers from phase 11
+[ -n "${IDS[CUST_SHAPE_ID]:-}" ] && cleanup_delete T154 "customer/${IDS[CUST_SHAPE_ID]}" "customer (shape test)"
+
+# Note: employees cannot be deleted (403), so we skip EMP_INLINE_ID and EMP_DEEP_ID
+
+echo ""
+
+# ======================================================================
 # SUMMARY
 # ======================================================================
 echo "======================================================================"

@@ -19,7 +19,7 @@ NOT raw integers. Applies to all foreign key fields: `customer`, `employee`, `de
   "values": [...]
 }
 ```
-Pagination: `?from=X&count=Y`.
+Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fields, but avoid it unless you are certain of the exact DTO field names — wrong names cause HTTP 400, wasting a call.
 
 ### Single entity (`GET /entity/{id}`)
 ```json
@@ -67,9 +67,10 @@ Every entity has a `version` integer. For PUT updates:
 **Call-saving:** If you just created the entity, reuse `id` and `version` from the POST response — skip the GET.
 
 ## Nested Object Updates (PUT)
-Nested objects with their own `id`/`version` (like Address) must include those fields or the update is **silently ignored**. A subsequent GET will show the fields unchanged.
+<!-- Corrected: address without id/version is NOT silently ignored — it creates a new address object replacing the old one. Verified 2026-03-20. -->
+For nested Address objects on customer/employee PUTs: including address data **without** `id`/`version` creates a **new address object** (old one is replaced). This is the simplest pattern — no need to track address IDs.
 
-**Call-saving:** POST responses include nested object IDs even for minimal creation (e.g., `postalAddress.id` is returned on `POST /customer` even with name-only). Cache these to avoid extra GETs.
+Do NOT try to reference an old address `id` on a different PUT — Tripletex rejects reusing address IDs across operations.
 
 ## Inline Creation
 Any writable array-of-object field supports inline creation on POST. Create parent + children in a single call.
@@ -79,6 +80,7 @@ Verified inline fields:
 - `Employee.employments` → `[Employment]` (and `Employment.employmentDetails` → `[EmploymentDetails]`)
 - `TravelExpense.costs` → `[Cost]`
 - `TravelExpense.perDiemCompensations` → `[PerDiemCompensation]`
+- `Project.participants` → `[ProjectParticipant]`
 
 **Always prefer inline creation over separate calls when possible.**
 

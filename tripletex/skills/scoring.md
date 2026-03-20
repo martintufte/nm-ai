@@ -21,4 +21,3 @@ That's it. Wall time, iteration count, and parallel vs sequential execution do *
 - **Reuse POST response IDs.** The response contains the ID. Don't GET it again.
 - **Inline creation.** Nest objects (e.g. orders inside invoice) in one call.
 - **Never retry failed calls.** A retry doubles your error count for no benefit.
-- **Don't fetch what you don't need.** Use `?fields=` to limit GET responses.
