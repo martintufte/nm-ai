@@ -6,6 +6,7 @@ Usage:
     uvicorn nmai.tasks.tripletex.solve:app --host 0.0.0.0 --port 8080
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -14,8 +15,18 @@ from pathlib import Path
 
 import anthropic
 import requests
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from anthropic import Anthropic
+from anthropic import beta_tool
+from anthropic.lib.tools import ToolError
+from fastapi import Depends
+from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -26,6 +37,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Tripletex AI Agent")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError,
+) -> JSONResponse:
+    body = await request.body()
+    logger.error(
+        "Validation error on %s %s\n  Headers: %s\n  Body (first 2000 chars): %s\n  Errors: %s",
+        request.method,
+        request.url,
+        dict(request.headers),
+        body[:2000].decode(errors="replace"),
+        exc.errors(),
+    )
+    # exc.errors() may contain tuples/bytes that aren't JSON-serializable
+    errors_str = str(exc.errors())
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors_str},
+    )
 
 # ---------------------------------------------------------------------------
 # Auth – static bearer token from environment
@@ -55,83 +87,6 @@ MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_ITERATIONS = 50
 MAX_RESPONSE_CHARS = 20_000  # Truncate large API responses
 
-# ---------------------------------------------------------------------------
-# Tool definitions for Claude
-# ---------------------------------------------------------------------------
-TOOLS: list[anthropic.types.ToolParam] = [
-    {
-        "name": "tripletex_get",
-        "description": "GET request to the Tripletex API. Returns parsed JSON.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "description": "API path, e.g. '/v2/employee' or '/v2/invoice?fields=id,invoiceNumber'",
-                },
-                "params": {
-                    "type": "object",
-                    "description": "Optional query parameters as key-value pairs.",
-                    "additionalProperties": True,
-                },
-            },
-            "required": ["endpoint"],
-        },
-    },
-    {
-        "name": "tripletex_post",
-        "description": "POST request to the Tripletex API. Returns parsed JSON.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "description": "API path, e.g. '/v2/employee'",
-                },
-                "data": {
-                    "type": "object",
-                    "description": "JSON body to send.",
-                    "additionalProperties": True,
-                },
-            },
-            "required": ["endpoint", "data"],
-        },
-    },
-    {
-        "name": "tripletex_put",
-        "description": "PUT request to the Tripletex API. Returns parsed JSON.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "description": "API path, e.g. '/v2/employee/123'",
-                },
-                "data": {
-                    "type": "object",
-                    "description": "JSON body to send.",
-                    "additionalProperties": True,
-                },
-            },
-            "required": ["endpoint", "data"],
-        },
-    },
-    {
-        "name": "tripletex_delete",
-        "description": "DELETE request to the Tripletex API. Returns nothing on success.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "endpoint": {
-                    "type": "string",
-                    "description": "API path, e.g. '/v2/employee/123'",
-                },
-            },
-            "required": ["endpoint"],
-        },
-    },
-]
-
 
 # ---------------------------------------------------------------------------
 # Request / response models
@@ -148,97 +103,20 @@ class SolveResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tripletex HTTP helpers
+# Tripletex session factory
 # ---------------------------------------------------------------------------
 def get_tripletex_session(base_url: str, session_token: str) -> requests.Session:
     """Create an authenticated requests session for the Tripletex API."""
     session = requests.Session()
     session.auth = ("0", session_token)
     session.headers.update({"Content-Type": "application/json"})
-    # Store base_url on the session for convenience
     session.base_url = base_url  # type: ignore[attr-defined]
     return session
 
 
-def tripletex_get(
-    session: requests.Session,
-    endpoint: str,
-    params: dict | None = None,
-) -> dict:
-    """GET request to Tripletex API."""
-    url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-    response = session.get(url, params=params)
-    response.raise_for_status()
-    return response.json()
-
-
-def tripletex_post(session: requests.Session, endpoint: str, data: dict) -> dict:
-    """POST request to Tripletex API."""
-    url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-    response = session.post(url, json=data)
-    response.raise_for_status()
-    return response.json()
-
-
-def tripletex_put(session: requests.Session, endpoint: str, data: dict) -> dict:
-    """PUT request to Tripletex API."""
-    url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-    response = session.put(url, json=data)
-    response.raise_for_status()
-    return response.json()
-
-
-def tripletex_delete(session: requests.Session, endpoint: str) -> None:
-    """DELETE request to Tripletex API."""
-    url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
-    response = session.delete(url)
-    response.raise_for_status()
-
-
 # ---------------------------------------------------------------------------
-# Tool execution
+# Helpers
 # ---------------------------------------------------------------------------
-def execute_tool(
-    name: str, input_data: dict, session: requests.Session
-) -> str:
-    """Dispatch a tool call to the appropriate Tripletex helper.
-
-    Returns a JSON string with the result or error details.
-    Errors are caught so Claude sees them without crashing the loop.
-    """
-    try:
-        if name == "tripletex_get":
-            result = tripletex_get(
-                session, input_data["endpoint"], input_data.get("params")
-            )
-            return _truncate(json.dumps(result))
-        elif name == "tripletex_post":
-            result = tripletex_post(
-                session, input_data["endpoint"], input_data["data"]
-            )
-            return _truncate(json.dumps(result))
-        elif name == "tripletex_put":
-            result = tripletex_put(
-                session, input_data["endpoint"], input_data["data"]
-            )
-            return _truncate(json.dumps(result))
-        elif name == "tripletex_delete":
-            tripletex_delete(session, input_data["endpoint"])
-            return json.dumps({"status": "deleted"})
-        else:
-            return json.dumps({"error": f"Unknown tool: {name}"})
-    except requests.HTTPError as e:
-        status = e.response.status_code if e.response is not None else None
-        body = ""
-        if e.response is not None:
-            try:
-                body = e.response.text[:2000]
-            except Exception:
-                body = str(e)
-        logger.warning("Tool %s returned HTTP %s: %s", name, status, body)
-        return json.dumps({"error": f"HTTP {status}", "details": body})
-
-
 def _truncate(text: str) -> str:
     """Truncate a string if it exceeds MAX_RESPONSE_CHARS."""
     if len(text) <= MAX_RESPONSE_CHARS:
@@ -247,19 +125,106 @@ def _truncate(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool factory — returns @beta_tool-decorated closures bound to a session
+# ---------------------------------------------------------------------------
+def make_tools(session: requests.Session):  # noqa: ANN201
+    """Create Tripletex API tools bound to the given requests session."""
+
+    @beta_tool
+    def tripletex_get(endpoint: str, params: dict | None = None) -> str:
+        """GET request to the Tripletex API. Returns JSON response.
+
+        Args:
+            endpoint: API path, e.g. '/v2/employee' or '/v2/invoice?fields=id,invoiceNumber'.
+            params: Optional query parameters as key-value pairs.
+        """
+        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
+        logger.info("GET %s params=%s", url, params)
+        try:
+            resp = session.get(url, params=params)
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else "?"
+            body = e.response.text[:2000] if e.response is not None else str(e)
+            logger.warning("GET %s → HTTP %s: %s", url, status_code, body)
+            raise ToolError(f"HTTP {status_code}: {body}") from e
+        return _truncate(json.dumps(resp.json()))
+
+    @beta_tool
+    def tripletex_post(endpoint: str, data: dict) -> str:
+        """POST request to the Tripletex API. Returns JSON response.
+
+        Args:
+            endpoint: API path, e.g. '/v2/employee'.
+            data: JSON body to send.
+        """
+        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
+        logger.info("POST %s data=%s", url, json.dumps(data)[:500])
+        try:
+            resp = session.post(url, json=data)
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else "?"
+            body = e.response.text[:2000] if e.response is not None else str(e)
+            logger.warning("POST %s → HTTP %s: %s", url, status_code, body)
+            raise ToolError(f"HTTP {status_code}: {body}") from e
+        return _truncate(json.dumps(resp.json()))
+
+    @beta_tool
+    def tripletex_put(endpoint: str, data: dict) -> str:
+        """PUT request to the Tripletex API. Returns JSON response.
+
+        Args:
+            endpoint: API path, e.g. '/v2/employee/123'.
+            data: JSON body to send.
+        """
+        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
+        logger.info("PUT %s data=%s", url, json.dumps(data)[:500])
+        try:
+            resp = session.put(url, json=data)
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else "?"
+            body = e.response.text[:2000] if e.response is not None else str(e)
+            logger.warning("PUT %s → HTTP %s: %s", url, status_code, body)
+            raise ToolError(f"HTTP {status_code}: {body}") from e
+        return _truncate(json.dumps(resp.json()))
+
+    @beta_tool
+    def tripletex_delete(endpoint: str) -> str:
+        """DELETE request to the Tripletex API. Returns confirmation on success.
+
+        Args:
+            endpoint: API path, e.g. '/v2/employee/123'.
+        """
+        url = f"{session.base_url}/{endpoint.lstrip('/')}"  # type: ignore[attr-defined]
+        logger.info("DELETE %s", url)
+        try:
+            resp = session.delete(url)
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else "?"
+            body = e.response.text[:2000] if e.response is not None else str(e)
+            logger.warning("DELETE %s → HTTP %s: %s", url, status_code, body)
+            raise ToolError(f"HTTP {status_code}: {body}") from e
+        return json.dumps({"status": "deleted"})
+
+    return [tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+
+
+# ---------------------------------------------------------------------------
 # Message building
 # ---------------------------------------------------------------------------
 def build_user_message(
-    task_prompt: str, files: list[str] | None
+    task_prompt: str, files: list[str] | None,
 ) -> list[anthropic.types.ContentBlockParam]:
     """Build the initial user message with text and optional file attachments."""
     content: list[anthropic.types.ContentBlockParam] = [
-        {"type": "text", "text": f"## Task\n\n{task_prompt}"}
+        {"type": "text", "text": f"## Task\n\n{task_prompt}"},
     ]
 
     if files:
-        for i, file_b64 in enumerate(files):
-            # Try to detect media type from the base64 header or default to image
+        for file_b64 in files:
             media_type = _detect_media_type(file_b64)
             # Strip data URI prefix if present
             if "," in file_b64 and file_b64.index(",") < 100:
@@ -274,7 +239,7 @@ def build_user_message(
                             "media_type": "application/pdf",
                             "data": file_b64,
                         },
-                    }
+                    },
                 )
             else:
                 content.append(
@@ -285,7 +250,7 @@ def build_user_message(
                             "media_type": media_type,
                             "data": file_b64,
                         },
-                    }
+                    },
                 )
 
     return content
@@ -294,12 +259,10 @@ def build_user_message(
 def _detect_media_type(b64_string: str) -> str:
     """Detect media type from a base64 string, possibly with data URI prefix."""
     if b64_string.startswith("data:"):
-        # data:image/png;base64,...
         header = b64_string.split(",", 1)[0]
         media_type = header.split(":")[1].split(";")[0]
         return media_type
 
-    # Try to detect from the first few bytes
     try:
         raw = base64.b64decode(b64_string[:32], validate=False)
         if raw[:4] == b"%PDF":
@@ -315,7 +278,7 @@ def _detect_media_type(b64_string: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agentic loop
+# Agentic loop — SDK tool runner
 # ---------------------------------------------------------------------------
 def parse_and_execute_task(
     task_prompt: str,
@@ -324,60 +287,32 @@ def parse_and_execute_task(
 ) -> None:
     """Run the Claude agentic loop to solve a Tripletex task.
 
-    1. Send the task prompt (+ files) to Claude with tool definitions.
-    2. When Claude returns tool_use blocks, execute them and feed results back.
-    3. Repeat until Claude signals end_turn or we hit MAX_ITERATIONS.
+    Uses the SDK's beta tool runner which automatically handles:
+    message accumulation, tool call dispatch, error propagation,
+    and stop condition detection.
     """
-    client = anthropic.Anthropic()
+    client = Anthropic()
+    tools = make_tools(session)
+    user_content = build_user_message(task_prompt, files)
 
-    messages: list[anthropic.types.MessageParam] = [
-        {"role": "user", "content": build_user_message(task_prompt, files)}
-    ]
+    runner = client.beta.messages.tool_runner(
+        model=MODEL,
+        max_tokens=16384,
+        system=_FULL_SYSTEM_PROMPT,
+        tools=tools,
+        messages=[{"role": "user", "content": user_content}],
+        max_iterations=MAX_ITERATIONS,
+    )
 
-    for iteration in range(MAX_ITERATIONS):
-        logger.info("Iteration %d", iteration + 1)
-
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            system=_FULL_SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
+    for iteration, message in enumerate(runner, 1):
+        logger.info(
+            "Iteration %d — stop_reason=%s, usage=%s",
+            iteration,
+            message.stop_reason,
+            message.usage,
         )
 
-        # Collect assistant content blocks
-        assistant_content = response.content
-
-        # Append the full assistant message
-        messages.append({"role": "assistant", "content": assistant_content})
-
-        # Check if we're done
-        if response.stop_reason == "end_turn":
-            logger.info("Agent finished (end_turn) after %d iterations", iteration + 1)
-            return
-
-        # Process tool use blocks
-        tool_results: list[anthropic.types.ToolResultBlockParam] = []
-        for block in assistant_content:
-            if block.type == "tool_use":
-                logger.info("Calling tool: %s(%s)", block.name, block.input)
-                result = execute_tool(block.name, block.input, session)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    }
-                )
-
-        if tool_results:
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            # No tool calls and not end_turn — shouldn't happen, but break to be safe
-            logger.warning("No tool calls and stop_reason=%s, breaking", response.stop_reason)
-            return
-
-    logger.warning("Hit max iterations (%d), stopping", MAX_ITERATIONS)
+    logger.info("Agent finished after %d iterations", iteration)
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +344,8 @@ async def solve(request: SolveRequest) -> SolveResponse:
         logger.warning("ANTHROPIC_API_KEY is not set, skipping LLM agent loop")
         return SolveResponse(status="completed")
 
-    parse_and_execute_task(
+    await asyncio.to_thread(
+        parse_and_execute_task,
         task_prompt=request.task_prompt,
         session=session,
         files=request.files,
