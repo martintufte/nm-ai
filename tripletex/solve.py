@@ -6,11 +6,6 @@ Usage:
     uvicorn nmai.tasks.tripletex.solve:app --host 0.0.0.0 --port 8080
 """
 
-<<<<<<< Updated upstream
-import requests
-from fastapi import FastAPI
-from pydantic import BaseModel
-=======
 import base64
 import json
 import logging
@@ -29,7 +24,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
->>>>>>> Stashed changes
 
 app = FastAPI(title="Tripletex AI Agent")
 
@@ -386,14 +380,10 @@ def parse_and_execute_task(
     logger.warning("Hit max iterations (%d), stopping", MAX_ITERATIONS)
 
 
-<<<<<<< Updated upstream
-@app.post("/solve")
-=======
 # ---------------------------------------------------------------------------
 # FastAPI endpoints
 # ---------------------------------------------------------------------------
 @app.post("/solve", response_model=SolveResponse, dependencies=[Depends(verify_token)])
->>>>>>> Stashed changes
 async def solve(request: SolveRequest) -> SolveResponse:
     """Main endpoint called by the competition platform."""
     file_count = len(request.files) if request.files else 0
