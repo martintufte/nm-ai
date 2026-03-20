@@ -106,7 +106,21 @@ venv/
 # mkdocs documentation
 /site
 
-# NorgesGruppen Data:
-norgesgruppen/data/NM_NGD_coco_dataset/
-norgesgruppen/data/NM_NGD_product_images/
-norgesgruppen/output/*/predictions.json
+# Astar island
+
+# Norgesgruppen
+# Training data (download separately)
+norgesgruppen/data/coco/
+norgesgruppen/data/product_references/
+norgesgruppen/data/yolo/
+
+# Training runs
+norgesgruppen/experiments/
+
+# Pretrained weights
+norgesgruppen/*.pt
+
+# Submission artifacts
+norgesgruppen/submission.zip
+
+# Tripletex

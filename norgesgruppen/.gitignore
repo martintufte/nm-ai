@@ -4,7 +4,6 @@ data/product_references/
 data/yolo/
 
 # Training runs
-runs/
 experiments/
 
 # Pretrained weights
