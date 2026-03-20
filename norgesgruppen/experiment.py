@@ -33,6 +33,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 LOGGER = logging.getLogger(__name__)
 
 EXPERIMENTS_DIR = Path(__file__).parent / "experiments"
+WEIGHTS_DIR = Path(__file__).parent / "weights"
 DATA_DIR = Path(__file__).parent / "data"
 ANNOTATIONS_PATH = DATA_DIR / "NM_NGD_coco_dataset" / "train" / "annotations.json"
 
@@ -102,13 +103,24 @@ def run_experiment(
     )
 
     # Step 2: Train
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     if pretrained_weights:
         LOGGER.info("Loading pretrained: %s", pretrained_weights)
         model = YOLO(pretrained_weights)
     else:
         model_name = f"{model_variant}{model_size}.pt"
-        LOGGER.info("Starting from: %s", model_name)
-        model = YOLO(model_name)
+        # Download pretrained weights to weights/ dir, not cwd
+        local_weights = WEIGHTS_DIR / model_name
+        if not local_weights.exists():
+            LOGGER.info("Downloading %s to %s...", model_name, WEIGHTS_DIR)
+            tmp_model = YOLO(model_name)
+            # ultralytics downloads to cwd; move it
+            cwd_weights = Path(model_name)
+            if cwd_weights.exists():
+                cwd_weights.rename(local_weights)
+            del tmp_model
+        LOGGER.info("Starting from: %s", local_weights)
+        model = YOLO(str(local_weights))
 
     LOGGER.info("Starting training (%d epochs, imgsz=%d)...", epochs, imgsz)
     _results = model.train(
@@ -132,10 +144,13 @@ def run_experiment(
         verbose=True,
     )
 
-    # Step 3: Collect raw predictions at low threshold, then sweep
+    # Step 3: Copy best weights to central weights/ dir
     best_weights = exp_dir / "train" / "weights" / "best.pt"
     if not best_weights.exists():
         best_weights = exp_dir / "train" / "weights" / "last.pt"
+    saved_weights = WEIGHTS_DIR / f"{name}.pt"
+    saved_weights.write_bytes(best_weights.read_bytes())
+    LOGGER.info("Saved trained weights: %s", saved_weights)
 
     LOGGER.info("Running inference + threshold sweep with: %s", best_weights)
     sweep_results = run_inference_and_sweep(
