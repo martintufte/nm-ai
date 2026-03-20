@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -110,3 +111,26 @@ venv/
 norgesgruppen/data/NM_NGD_coco_dataset/
 norgesgruppen/data/NM_NGD_product_images/
 norgesgruppen/output/*/predictions.json
+=======
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+>>>>>>> Stashed changes
