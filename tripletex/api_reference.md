@@ -563,6 +563,19 @@ Query params: `download`
 
 ---
 
+## ledger
+
+### `GET /ledger`
+Get ledger (hovedbok).
+
+**Aggregated ledger (hovedbok).** Returns per-account totals (`sumAmount`, `closingBalance`) for a date range.
+Use this instead of `GET /ledger/posting` when you need account-level totals — one call replaces scanning all postings.
+Supports `fields` filter, e.g. `fields=account(number,name),sumAmount,closingBalance` for compact output.
+
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**, `openPostings`, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId` (+3 more)
+
+---
+
 ## ledger/account
 
 ### `GET /ledger/account`
@@ -624,6 +637,62 @@ Get account by ID.
 Update account.
 
 Body: `Account` (see above)
+
+---
+
+## ledger/accountingDimensionName
+
+### `GET /ledger/accountingDimensionName`
+Get all accounting dimension names.
+
+Query params: `activeOnly`
+
+### `POST /ledger/accountingDimensionName`
+Create a new free (aka 'user defined') accounting dimension
+
+**Body:** `{"dimensionName": "<name>"}`. Returns created object with `dimensionIndex` (1, 2, or 3).
+
+**AccountingDimensionName** writable fields:
+  - `dimensionName`: string — The name of the dimension.
+  - `description`: string — The description of the dimension.
+  - `active`: boolean — Indicates if the dimension is active.
+
+### `DELETE /ledger/accountingDimensionName/{id}`
+Delete an accounting dimension name by ID
+
+### `GET /ledger/accountingDimensionName/{id}`
+Get a single accounting dimension name by ID
+
+### `PUT /ledger/accountingDimensionName/{id}`
+Update an accounting dimension
+
+Body: `AccountingDimensionName` (see above)
+
+---
+
+## ledger/accountingDimensionValue
+
+### `POST /ledger/accountingDimensionValue`
+Create a new value for one of the free (aka 'user defined') accounting dimensions
+
+**Body:** `{"displayName": "<value name>", "dimensionIndex": <1|2|3>}`. Use `dimensionIndex` from the parent dimension name.
+
+**AccountingDimensionValue** writable fields:
+  - `displayName`: string — The name of the value.
+  - `dimensionIndex`: integer(int32) — The index of the dimension this value belongs to.
+  - `active`: boolean — Indicates if the value is active.
+  - `number`: string — The number of the value, which can consist of letters and numbers.
+  - `showInVoucherRegistration`: boolean — Indicates if the value should be shown in voucher registration.
+  - `position`: integer(int32) — The position of the value in the list of values for the dimension.
+
+### `PUT /ledger/accountingDimensionValue/list`
+Update accounting dimension values
+
+### `DELETE /ledger/accountingDimensionValue/{id}`
+Delete an accounting dimension value.  Values that have been used in postings can not be deleted.
+
+### `GET /ledger/accountingDimensionValue/{id}`
+Find accounting dimension values by ID.
 
 ---
 

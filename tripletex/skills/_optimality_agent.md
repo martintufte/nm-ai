@@ -63,6 +63,10 @@ Many list params accept comma-separated values.
 
 Only call endpoints the task requires. Don't explore whether alternative APIs exist — use the approach the task describes or that you already know works.
 
+Common unnecessary calls to flag:
+- `GET /department` — only needed when **creating** employees (hidden required field). If the task only looks up existing employees, skip it.
+- `GET /token/session/>whoAmI` — only needed when you need the admin employee ID (e.g. as projectManager). If the task doesn't require the current user's identity, skip it.
+
 ## Domain-specific optimality skills
 
 Each domain has its own optimality patterns with inline capabilities and common pitfalls:

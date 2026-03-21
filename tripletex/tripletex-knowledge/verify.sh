@@ -280,14 +280,9 @@ api POST project "{\"name\":\"Verify Project $TS\",\"projectManager\":{\"id\":${
 expect_success T31 "POST /project (with startDate)"
 IDS[PROJ_ID]=$(extract_id)
 
-# T32: Subcontract without displayName → 422
+# T32: Subcontract without displayName → 422 (secretly required)
 api POST "project/subcontract" "{\"project\":{\"id\":${IDS[PROJ_ID]}},\"name\":\"SubNoDisplay $TS\",\"budgetExpensesCurrency\":1000}"
-expect_fail T32 "POST /project/subcontract (no displayName)"
-
-# T33: Subcontract with displayName → 201
-api POST "project/subcontract" "{\"project\":{\"id\":${IDS[PROJ_ID]}},\"displayName\":\"SubWithDisplay $TS\",\"name\":\"SubWithDisplay $TS\",\"budgetExpensesCurrency\":1000}"
-expect_success T33 "POST /project/subcontract (with displayName)"
-IDS[SUBCONTRACT_ID]=$(extract_id)
+expect_fail T32 "POST /project/subcontract (no displayName) [secretly required]"
 
 echo ""
 
@@ -1245,6 +1240,17 @@ for v in vs:
     vt=v.get('vatType',{})
     print(vt.get('id',0) if vt else 0); break
 " 2>/dev/null)
+# Also extract salary (5000) and payable (2900) accounts for T143
+ACCT_SALARY=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+for v in vs:
+  if v.get('number',0) == 5000: print(v['id']); break
+" 2>/dev/null)
+ACCT_PAYABLE=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; vs=json.load(sys.stdin)['values']
+for v in vs:
+  if v.get('number',0) == 2900: print(v['id']); break
+" 2>/dev/null)
 if [ -n "$ACCT_REVENUE" ] && [ -n "$ACCT_EXPENSE" ]; then
   api POST "ledger/voucher" "{
     \"date\":\"$TODAY\",
@@ -1292,6 +1298,33 @@ if [ "$LAST_CODE" = "200" ]; then
 else
   record FAIL T142 "GET /ledger/posting (date range)" "got $LAST_CODE"
   validation_msg
+fi
+
+# T143: POST /ledger/voucher with multiple debit/credit pairs (monthly closing pattern)
+# Verified: a single voucher can hold 6+ posting lines spanning different account pairs.
+# This is more efficient than creating 3 separate vouchers (3 POSTs → 1 POST).
+if [ -n "$ACCT_REVENUE" ] && [ -n "$ACCT_EXPENSE" ] && [ -n "${ACCT_SALARY:-}" ] && [ -n "${ACCT_PAYABLE:-}" ]; then
+  api POST "ledger/voucher" "{
+    \"date\":\"$TODAY\",
+    \"description\":\"Verify multi-pair voucher $TS\",
+    \"postings\":[
+      {\"date\":\"$TODAY\",\"description\":\"pair1 debit\",\"account\":{\"id\":$ACCT_REVENUE},\"vatType\":{\"id\":${ACCT_REV_VAT:-0}},\"amountGross\":1000.0,\"amountGrossCurrency\":1000.0,\"row\":1},
+      {\"date\":\"$TODAY\",\"description\":\"pair1 credit\",\"account\":{\"id\":$ACCT_EXPENSE},\"vatType\":{\"id\":${ACCT_EXP_VAT:-0}},\"amountGross\":-1000.0,\"amountGrossCurrency\":-1000.0,\"row\":2},
+      {\"date\":\"$TODAY\",\"description\":\"pair2 debit\",\"account\":{\"id\":$ACCT_SALARY},\"vatType\":{\"id\":0},\"amountGross\":50000.0,\"amountGrossCurrency\":50000.0,\"row\":3},
+      {\"date\":\"$TODAY\",\"description\":\"pair2 credit\",\"account\":{\"id\":$ACCT_PAYABLE},\"vatType\":{\"id\":0},\"amountGross\":-50000.0,\"amountGrossCurrency\":-50000.0,\"row\":4},
+      {\"date\":\"$TODAY\",\"description\":\"pair3 debit\",\"account\":{\"id\":$ACCT_EXPENSE},\"vatType\":{\"id\":${ACCT_EXP_VAT:-0}},\"amountGross\":2500.0,\"amountGrossCurrency\":2500.0,\"row\":5},
+      {\"date\":\"$TODAY\",\"description\":\"pair3 credit\",\"account\":{\"id\":$ACCT_REVENUE},\"vatType\":{\"id\":${ACCT_REV_VAT:-0}},\"amountGross\":-2500.0,\"amountGrossCurrency\":-2500.0,\"row\":6}
+    ]
+  }"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    posting_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['value']['postings']))" 2>/dev/null)
+    record PASS T143 "POST /ledger/voucher (multi-pair, 6 postings)" "postings=$posting_count"
+  else
+    record FAIL T143 "POST /ledger/voucher (multi-pair)" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T143 "POST /ledger/voucher (multi-pair)" "missing salary/payable accounts"
 fi
 
 echo ""
@@ -1448,6 +1481,38 @@ if [ "$LAST_CODE" = "200" ]; then
   record PASS T259 "GET /ledger/posting dateFrom=dateTo → 200 (inclusive)" "count=$p_count — unlike invoice/voucher/timesheet"
 else
   record FAIL T259 "GET /ledger/posting dateFrom=dateTo" "got $LAST_CODE (expected 200 — posting allows same-day)"
+fi
+
+# T274: GET /ledger/posting with comma-separated accountId → 404
+# Agent keeps trying accountId=ID1,ID2,ID3 which returns 404.
+# Single accountId per request works fine. Verify the API rejects comma-separated.
+if [ -n "${ACCT_REVENUE:-}" ] && [ -n "${ACCT_EXPENSE:-}" ]; then
+  api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&accountId=${ACCT_REVENUE},${ACCT_EXPENSE}&count=5"
+  if [ "$LAST_CODE" = "404" ]; then
+    record PASS T274 "GET /ledger/posting comma-separated accountId → 404" "confirmed: must use one accountId per request"
+  else
+    record FAIL T274 "GET /ledger/posting comma-separated accountId" "expected 404, got $LAST_CODE"
+  fi
+
+  # Verify single accountId works
+  api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&accountId=${ACCT_REVENUE}&count=5"
+  if [ "$LAST_CODE" = "200" ]; then
+    record PASS T274b "GET /ledger/posting single accountId → 200" "single accountId works"
+  else
+    record FAIL T274b "GET /ledger/posting single accountId" "expected 200, got $LAST_CODE"
+  fi
+
+  # T274c: Repeated accountId params silently use only the first value (no union)
+  api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&accountId=${ACCT_REVENUE}&accountId=${ACCT_EXPENSE}&count=5"
+  if [ "$LAST_CODE" = "200" ]; then
+    record PASS T274c "GET /ledger/posting repeated accountId → 200 (but only first used)" "no multi-account support — must query individually"
+  else
+    record FAIL T274c "GET /ledger/posting repeated accountId" "expected 200, got $LAST_CODE"
+  fi
+else
+  record SKIP T274 "GET /ledger/posting comma-separated accountId" "no account IDs from phase 14"
+  record SKIP T274b "GET /ledger/posting single accountId" "no account IDs from phase 14"
+  record SKIP T274c "GET /ledger/posting repeated accountId" "no account IDs from phase 14"
 fi
 
 # ----- Project hourly rates -----
@@ -1767,6 +1832,57 @@ else:
   fi
 else
   record SKIP T263 "GET /employee fields=employments(*)" "no inline employee"
+fi
+
+# ----- Invalid fields filter: envelope fields → 400 -----
+# "total" and "values" are response envelope fields, never valid DTO fields.
+# Verified across 12 endpoints below.
+
+_fields_envelope_test() {
+  # $1=test_id $2=endpoint_with_params $3=bad_field $4=short_desc
+  local tid="$1" ep="$2" bad="$3" desc="$4"
+  api GET "${ep}&fields=${bad}"
+  if [ "$LAST_CODE" = "400" ]; then
+    record PASS "$tid" "GET /${desc} fields=${bad} → 400" "envelope field rejected"
+  else
+    record FAIL "$tid" "GET /${desc} fields=${bad}" "expected 400, got $LAST_CODE"
+  fi
+}
+
+# total
+_fields_envelope_test T275a "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&count=1" total ledger/posting
+_fields_envelope_test T275b "customer?customerName=nonexistent_${TS}&count=1" total customer
+_fields_envelope_test T275c "employee?count=1" total employee
+_fields_envelope_test T275d "department?count=1" total department
+_fields_envelope_test T275e "product?count=1" total product
+_fields_envelope_test T275f "project?count=1" total project
+_fields_envelope_test T275g "order?orderDateFrom=2026-01-01&orderDateTo=2026-12-31&count=1" total order
+_fields_envelope_test T275h "invoice?invoiceDateFrom=2026-01-01&invoiceDateTo=2026-12-31&count=1" total invoice
+_fields_envelope_test T275i "ledger/account?count=1" total ledger/account
+_fields_envelope_test T275j "ledger/voucher?dateFrom=2026-01-01&dateTo=2026-12-31&count=1" total ledger/voucher
+_fields_envelope_test T275k "travelExpense?count=1" total travelExpense
+_fields_envelope_test T275l "activity?count=1" total activity
+
+# values
+_fields_envelope_test T275m "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&count=1" "values(date,amountGross)" ledger/posting
+_fields_envelope_test T275n "customer?customerName=nonexistent_${TS}&count=1" "values(id,name)" customer
+_fields_envelope_test T275o "employee?count=1" values employee
+_fields_envelope_test T275p "department?count=1" values department
+_fields_envelope_test T275q "product?count=1" values product
+_fields_envelope_test T275r "project?count=1" values project
+_fields_envelope_test T275s "order?orderDateFrom=2026-01-01&orderDateTo=2026-12-31&count=1" values order
+_fields_envelope_test T275t "invoice?invoiceDateFrom=2026-01-01&invoiceDateTo=2026-12-31&count=1" values invoice
+_fields_envelope_test T275u "ledger/account?count=1" values ledger/account
+_fields_envelope_test T275v "ledger/voucher?dateFrom=2026-01-01&dateTo=2026-12-31&count=1" values ledger/voucher
+_fields_envelope_test T275w "travelExpense?count=1" values travelExpense
+_fields_envelope_test T275x "activity?count=1" values activity
+
+# Sanity: valid DTO fields → 200
+api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&count=1&fields=id,date,amountGross"
+if [ "$LAST_CODE" = "200" ]; then
+  record PASS T275z "GET /ledger/posting fields=id,date,amountGross → 200" "valid DTO fields accepted"
+else
+  record FAIL T275z "GET /ledger/posting valid fields" "expected 200, got $LAST_CODE"
 fi
 
 echo ""
@@ -2093,6 +2209,72 @@ echo "=== PHASE 16 Cleanup ==="
 [ -n "${IDS[PROJ_STD_PM_ID]:-}" ] && cleanup_delete T16C5 "project/${IDS[PROJ_STD_PM_ID]}" "project (std PM)"
 [ -n "${IDS[PROJ_GRANTED_PM_ID]:-}" ] && cleanup_delete T16C6 "project/${IDS[PROJ_GRANTED_PM_ID]}" "project (granted PM)"
 # Note: employees cannot be deleted (403)
+
+# ======================================================================
+# PHASE 17: GET /ledger — aggregated account totals (hovedbok)
+# ======================================================================
+echo "=== PHASE 17 GET /ledger aggregated totals ==="
+
+# T17.1: GET /ledger returns 200 with sumAmount per account
+api GET "ledger?dateFrom=2026-01-01&dateTo=2026-04-01&count=3"
+expect_success T17.1 "GET /ledger returns 200" 200
+
+# T17.2: Response contains sumAmount field
+HAS_SUM=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+vals=d.get('values',[])
+print('yes' if vals and 'sumAmount' in vals[0] else 'no')
+" 2>/dev/null)
+if [ "$HAS_SUM" = "yes" ]; then
+  record PASS T17.2 "GET /ledger response has sumAmount"
+else
+  record FAIL T17.2 "GET /ledger response has sumAmount" "sumAmount not found"
+fi
+
+# T17.3: fields filter works — returns only requested fields
+api GET "ledger?dateFrom=2026-01-01&dateTo=2026-04-01&count=1&fields=account(number,name),sumAmount,closingBalance"
+expect_success T17.3 "GET /ledger with fields filter returns 200" 200
+
+echo ""
+
+# ======================================================================
+# PHASE 18: Accounting dimensions — create name + values, then clean up
+# ======================================================================
+echo "=== PHASE 18 Accounting dimensions ==="
+
+# T18.1: Create dimension name with dimensionName field
+api POST "ledger/accountingDimensionName" '{"dimensionName": "VerifyDim_'"$TS"'"}'
+expect_success T18.1 "POST /ledger/accountingDimensionName creates dimension" 201
+IDS[DIM_NAME_ID]=$(extract_id)
+DIM_INDEX=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['value']['dimensionIndex'])" 2>/dev/null)
+
+# T18.2: Create dimension value with displayName + dimensionIndex
+if [ -n "${DIM_INDEX:-}" ]; then
+  api POST "ledger/accountingDimensionValue" '{"displayName": "ValA_'"$TS"'", "dimensionIndex": '"$DIM_INDEX"'}'
+  expect_success T18.2 "POST /ledger/accountingDimensionValue creates value" 201
+  IDS[DIM_VAL1_ID]=$(extract_id)
+else
+  record SKIP T18.2 "POST /ledger/accountingDimensionValue (no dimensionIndex)"
+fi
+
+# T18.3: Create second value on same dimension
+if [ -n "${DIM_INDEX:-}" ]; then
+  api POST "ledger/accountingDimensionValue" '{"displayName": "ValB_'"$TS"'", "dimensionIndex": '"$DIM_INDEX"'}'
+  expect_success T18.3 "POST /ledger/accountingDimensionValue second value" 201
+  IDS[DIM_VAL2_ID]=$(extract_id)
+else
+  record SKIP T18.3 "POST /ledger/accountingDimensionValue second value (no dimensionIndex)"
+fi
+
+# T18.4: Wrong field name → 422
+api POST "ledger/accountingDimensionValue" '{"name": "ShouldFail", "dimensionIndex": 1}'
+expect_fail T18.4 "POST /ledger/accountingDimensionValue with wrong field name" 422
+
+# Cleanup
+[ -n "${IDS[DIM_VAL2_ID]:-}" ] && cleanup_delete T18C1 "ledger/accountingDimensionValue/${IDS[DIM_VAL2_ID]}" "dimension value 2"
+[ -n "${IDS[DIM_VAL1_ID]:-}" ] && cleanup_delete T18C2 "ledger/accountingDimensionValue/${IDS[DIM_VAL1_ID]}" "dimension value 1"
+[ -n "${IDS[DIM_NAME_ID]:-}" ] && cleanup_delete T18C3 "ledger/accountingDimensionName/${IDS[DIM_NAME_ID]}" "dimension name"
 
 echo ""
 

@@ -27,6 +27,18 @@ Query params: `id`, `number`, `isBankAccount`, `isInactive`, `isApplicableForSup
 
 ---
 
+## Ledger (Hovedbok) — Aggregated Account Totals
+
+`GET /ledger` returns per-account totals for a date range — `sumAmount`, `openingBalance`, `closingBalance`. Use this instead of `GET /ledger/posting` when you need account-level totals (e.g. finding largest expense accounts, comparing periods). One call replaces scanning all postings.
+
+```
+GET /ledger?dateFrom=2026-01-01&dateTo=2026-02-01&fields=account(number,name),sumAmount,closingBalance
+```
+
+Query params: `dateFrom` **(required)**, `dateTo` **(required)**, `accountId`, `supplierId`, `customerId`, `employeeId`, `departmentId`, `projectId`, `productId`
+
+---
+
 ## Posting — Ledger Postings
 
 Read-only lookup of accounting postings. Created indirectly via vouchers.
@@ -69,6 +81,10 @@ POST /ledger/voucher
 - Include `vatType` on each posting — accounts with `vatLocked=true` require the matching vatType or POST fails
 - Use revenue (3xxx) and expense (6xxx+) accounts — asset accounts (1xxx) may be system-locked
 - The API auto-generates VAT postings (row=0) based on account VAT settings
+
+**Prepaid expense reversal (17xx):**
+- Debit the expense account the prepaid relates to, credit the 17xx account. No default — if the task doesn't specify the debit account, `GET /ledger/posting` on the 17xx account to find the original contra-account.
+- Never use 6010 (depreciation) as a fallback for prepaid reversals.
 
 **Manual payroll voucher:**
 - Debit: 5000-series (salary expense, e.g. 5000 "Lønn") — total gross salary
@@ -195,11 +211,13 @@ Use `GET /currency?code=NOK` to find the NOK currency ID.
 
 ### Accounting dimensions
 - `GET /ledger/accountingDimensionName` — all dimension names
-- `POST /ledger/accountingDimensionName` — create user-defined dimension
+- `POST /ledger/accountingDimensionName` — create user-defined dimension. Body: `{"dimensionName": "<name>"}`. Returns the created object with `dimensionIndex` (1, 2, or 3).
 - `GET /ledger/accountingDimensionName/{id}`
 - `PUT /ledger/accountingDimensionName/{id}`
 - `DELETE /ledger/accountingDimensionName/{id}`
-- `POST /ledger/accountingDimensionValue` — create dimension value
+- `POST /ledger/accountingDimensionValue` — create dimension value. Body: `{"displayName": "<value name>", "dimensionIndex": <1|2|3>}`. Use the `dimensionIndex` from the parent dimension name object.
 - `PUT /ledger/accountingDimensionValue/list`
 - `GET /ledger/accountingDimensionValue/{id}`
 - `DELETE /ledger/accountingDimensionValue/{id}`
+
+**Linking dimensions to voucher postings:** Add `freeAccountingDimension1`, `freeAccountingDimension2`, or `freeAccountingDimension3` (matching the `dimensionIndex`) to the posting object: `"freeAccountingDimension1": {"id": <value_id>}`.

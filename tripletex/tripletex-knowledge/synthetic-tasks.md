@@ -652,12 +652,90 @@ Chain of creates and actions across multiple entity types, ending with a composi
 
 ---
 
+### Task 14.1 — Project + Activity + Timesheet for 2 Existing Employees (Norwegian Bokmål)
+
+**What's new:** Two pre-existing employees looked up by email, no department needed — tests that agent skips speculative `GET /department`
+
+**Prompt:**
+> Opprett prosjektet "{name}" (internt). Opprett aktiviteten "{activity}" og koble den til prosjektet. Legg til {emp1} ({email1}) og {emp2} ({email2}) som deltakere. Registrer 8 timer for {emp1} og 5 timer for {emp2} den 15. april 2026 på aktiviteten.
+
+**Expected flow:**
+1. `GET /employee?email=X` — look up employee A
+2. `GET /employee?email=Y` — look up employee B
+3. `GET /token/session/>whoAmI` — admin employee ID for projectManager
+4. `POST /activity` — create activity
+5. `POST /project` — with `projectManager: {id: ADMIN}`, `isInternal: true`, inline `participants` + `projectActivities`
+6. `POST /timesheet/entry` — 8 hours for employee A
+7. `POST /timesheet/entry` — 5 hours for employee B
+
+**Call count:** 7
+
+**Note:** `GET /department` is NOT needed — employees already exist and no department assignment is part of the task.
+
+---
+
+### Task 15.1 — Monthly Closing — Combined Voucher (Portuguese)
+
+**Prompt:**
+> Realize o fecho mensal de março 2026 com as seguintes três operações num único lançamento manual com data de hoje:
+> 1. Reversão de acréscimo: débito conta 7700, crédito conta 1710, valor 5000 NOK
+> 2. Depreciação: débito conta 6010, crédito conta 1710, valor 2656.25 NOK
+> 3. Provisão salarial: débito conta 5000, crédito conta 2900, valor 50000 NOK
+
+**Expected flow:**
+1. `GET /ledger/account?number=7700,1710,6010,5000,2900&count=10` — all 5 accounts in one call
+2. `POST /ledger/voucher` — single voucher with 6 posting lines (3 debit/credit pairs, sequential rows)
+
+**Call count:** 2
+
+**Note:** All same-date journal entries belong in one voucher. Creating separate vouchers per entry wastes API calls (3→1).
+
+---
+
+### Task 16.1 — Expense Reclassification from Postings (German)
+
+**Prompt:**
+> Am 2026-04-10 wurden Buchungen auf Konto 5000 (Lönn til ansatte) und Konto 6000 (Avskrivning) verbucht. Ermitteln Sie den Gesamtbetrag der Buchungen auf Konto 6000 an diesem Datum und erstellen Sie einen Umgliederungsbeleg (Datum 2026-04-10), der diesen Betrag von Konto 6000 auf Konto 5000 umbucht.
+
+**Setup:** Creates two vouchers on 2026-04-10 — one posting 32000 to account 5000, one posting 18500 to account 6000 (both via bank 1920).
+
+**Expected flow:**
+1. `GET /ledger/account?number=5000,6000&count=5` — look up both account IDs
+2. `GET /ledger/posting?dateFrom=2026-04-10&dateTo=2026-04-11&accountId={6000_id}&count=100` — get postings on 6000
+3. `POST /ledger/voucher` — reclassification: debit 5000 +18500, credit 6000 -18500
+
+**Call count:** 3
+
+**Note:** `ledger/posting` does not support comma-separated `accountId` (returns 404). Agent must query one account at a time. The agent only needs to query 6000 since that's the account being reclassified.
+
+---
+
+### Task 17.1 — Accounting Dimension + Voucher (French)
+
+**What's new:** Custom accounting dimension creation (name + values), voucher posting with `freeAccountingDimension{N}` reference
+
+**Prompt:**
+> Créez une dimension comptable personnalisée "{name}" avec les valeurs "{valA}" et "{valB}". Puis comptabilisez une pièce sur le compte 6340 pour 5050 NOK, liée à la valeur de dimension "{valB}".
+
+**Expected flow:**
+1. `POST /ledger/accountingDimensionName` — create dimension with `{"dimensionName": "<name>"}`, returns `dimensionIndex`
+2. `POST /ledger/accountingDimensionValue` — create first value with `{"displayName": "<valA>", "dimensionIndex": N}`
+3. `POST /ledger/accountingDimensionValue` — create second value (same pattern)
+4. `GET /ledger/account?number=6340,1920&count=5` — look up debit + credit account IDs
+5. `POST /ledger/voucher` — with posting on 6340 including `freeAccountingDimension{N}: {id: <valB_id>}`
+
+**Call count:** 5
+
+**Note:** The posting field for the dimension is `freeAccountingDimension1`, `2`, or `3` matching the `dimensionIndex` returned when creating the dimension name. The field names for creating values (`displayName`, `dimensionIndex`) are not obvious from the endpoint name — the agent must know these from the skill docs.
+
+---
+
 ## Coverage Summary
 
 ### Entities covered:
 | Entity | Create | Read/Lookup | Update | Delete |
 |--------|--------|-------------|--------|--------|
-| Employee | 1.1, 1.5, 1.8, 2.7, 5.6 | 2.3–2.5, 3.2, 3.5, 3.8, 5.2, 5.4, 5.5, 5.7 | 3.2 | — (not possible) |
+| Employee | 1.1, 1.5, 1.8, 2.7, 5.6 | 2.3–2.5, 3.2, 3.5, 3.8, 5.2, 5.4, 5.5, 5.7, 14.1 | 3.2 | — (not possible) |
 | Customer | 1.2, 1.7, 2.2, 5.1, 5.3, 5.10 | 2.1, 2.3, 2.6, 3.1, 3.4, 3.6, 4.3, 4.5, 5.8 | 3.1, 3.4 | 4.3 |
 | Product | 1.3, 2.2, 5.1, 5.3, 5.10 | 2.1, 2.6, 3.3, 4.4, 5.8 | 3.3 | 4.4 |
 | Department | 1.4 | 1.1, 1.5, 1.8, 2.7, 3.7, 4.1, 5.6 | 3.7 | 4.1 |
@@ -666,30 +744,33 @@ Chain of creates and actions across multiple entity types, ending with a composi
 | Credit Note | 5.3 | — | — | — |
 | Order | 2.6, 11.1 | — | — | — |
 | Order→Invoice | 11.1 | — | — | — |
-| Project | 2.3, 2.5, 5.5, 10.1 | 3.6 | 3.6, 10.1 | 4.6 |
+| Project | 2.3, 2.5, 5.5, 10.1, 14.1 | 3.6 | 3.6, 10.1 | 4.6 |
 | Travel Expense | 2.4, 5.2, 5.4, 5.7 | 4.2 | — | 4.2 |
 | Travel Cost | 2.4, 5.4 | — | — | — |
 | Travel Mileage | 5.2, 5.7 | — | — | — |
 | Travel Per Diem | 5.2, 5.4 | — | — | — |
 | Travel Accommodation | 5.4 | — | — | — |
 | Passenger Supplement | 5.7 | — | — | — |
-| Activity | 1.6, 2.5, 5.5 | — | — | — |
-| Timesheet | 2.5, 5.5 | — | — | — |
-| Voucher | 2.8, 5.9 | 4.7 | — | — |
+| Activity | 1.6, 2.5, 5.5, 14.1 | — | — | — |
+| Timesheet | 2.5, 5.5, 14.1 | — | — | — |
+| Voucher | 2.8, 5.9, 15.1, 16.1, 17.1 | 4.7 | — | — |
 | Voucher Reverse | 4.7 | — | — | — |
+| Accounting Dimension Name | 17.1 | — | — | — |
+| Accounting Dimension Value | 17.1 | — | — | — |
 | Employee Next of Kin | 2.7 | — | — | — |
 | Employee Standard Time | 3.8, 5.6 | — | — | — |
 | Employee Hourly Rate | 3.5, 5.6 | — | — | — |
 | Employee Employment | 1.1, 1.8, 5.6 (inline) | — | — | — |
-| Ledger Account | — | 2.1, 2.8, 5.1, 5.9 | (bank setup) | — |
+| Ledger Account | — | 2.1, 2.8, 5.1, 5.9, 15.1, 16.1 | (bank setup) | — |
+| Ledger Posting | — | 16.1 | — | — |
 
 ### Languages covered:
-- Norwegian Bokmål: 1.1, 2.2, 3.3, 4.2 (title in task — actual delete), 5.2, 5.7, 5.8
+- Norwegian Bokmål: 1.1, 2.2, 3.3, 4.2 (title in task — actual delete), 5.2, 5.7, 5.8, 14.1
 - English: 1.2, 1.8, 2.1, 2.3, 2.8, 3.2, 3.6, 4.3, 4.7, 5.4, 5.9
-- German: 1.3, 3.4, 4.1, 5.5, 5.10
-- Portuguese: 1.4, 2.6, 3.8, 4.6, 5.6
+- German: 1.3, 3.4, 4.1, 5.5, 5.10, 16.1
+- Portuguese: 1.4, 2.6, 3.8, 4.6, 5.6, 15.1
 - Spanish: 1.7, 2.4, 3.5, 4.5, 5.1, 5.3
-- French: 1.6, 3.1, 4.4, 2.5, 5.3
+- French: 1.6, 3.1, 4.4, 2.5, 5.3, 17.1
 - Nynorsk: 1.5, 3.7, 5.8
 
 ### API flow patterns covered:
@@ -697,6 +778,7 @@ Chain of creates and actions across multiple entity types, ending with a composi
 - **Pattern 2 (Create with linking):** 8 tasks (2.1–2.8)
 - **Pattern 3 (Modify existing):** 8 tasks (3.1–3.8)
 - **Pattern 4 (Delete/reverse):** 7 tasks (4.1–4.7)
-- **Pattern 5 (Multi-step):** 13 tasks (5.1–5.10, 9.1, 10.1, 11.1)
+- **Pattern 5 (Multi-step):** 17 tasks (5.1–5.10, 9.1, 10.1, 11.1, 14.1, 15.1, 16.1, 17.1)
+- **Pattern 6 (Read + act):** 1 task (16.1)
 
-**Total: 44 tasks**
+**Total: 48 tasks**

@@ -384,6 +384,25 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
                         f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead.",
                     )
 
+        if params and "accountId" in params and "," in str(params["accountId"]):
+            raise ToolError(
+                "accountId does not support comma-separated values (returns 404). "
+                "Make one request per accountId instead.",
+            )
+
+        # Block "total" and "values" in the fields filter — these are response
+        # envelope fields, never valid DTO fields. Verified across 12 endpoints
+        # in verify.sh T275a-T275x.
+        if params and "fields" in params:
+            top_level = {f.split("(")[0].strip() for f in str(params["fields"]).split(",")}
+            bad = {"total", "values"} & top_level
+            if bad:
+                raise ToolError(
+                    f"Invalid fields filter: {', '.join(sorted(bad))} are response envelope "
+                    f"fields, not DTO fields. Use DTO field names directly, e.g. "
+                    f"'id,date,account(id,number,name),amountGross'.",
+                )
+
         logger.info("GET %s params=%s", path, params)
         try:
             resp = _retry_request(client.get, path, params=params)

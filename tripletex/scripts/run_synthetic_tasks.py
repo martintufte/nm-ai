@@ -987,6 +987,93 @@ def build_tasks() -> list[SyntheticTask]:
             )
         return checks
 
+    # --- Task 14.1: Project + Activity + Timesheet for 2 existing employees (Norwegian) ---
+    # Tests that agent does NOT call GET /department when employees are pre-existing.
+    proj_name_14 = f"Skymigrering {uid}"
+    emp_first_14a = f"Maja{uid}"
+    emp_last_14a = f"Lund{uid}"
+    emp_email_14a = f"maja.{uid}@firma.no"
+    emp_first_14b = f"Eirik{uid}"
+    emp_last_14b = f"Vik{uid}"
+    emp_email_14b = f"eirik.{uid}@firma.no"
+    activity_name_14 = f"Backend {uid}"
+    dept_name_14 = f"Platform {uid}"
+
+    def setup_task_14(client: httpx.Client) -> None:
+        # Department needed for employee creation, but agent should NOT look it up
+        resp = client.post("department", json={"name": dept_name_14})
+        resp.raise_for_status()
+        dept_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created department '{dept_name_14}' (id={dept_id})")
+
+        for first, last, email in [
+            (emp_first_14a, emp_last_14a, emp_email_14a),
+            (emp_first_14b, emp_last_14b, emp_email_14b),
+        ]:
+            resp = client.post(
+                "employee",
+                json={
+                    "firstName": first,
+                    "lastName": last,
+                    "email": email,
+                    "userType": "NO_ACCESS",
+                    "department": {"id": dept_id},
+                },
+            )
+            resp.raise_for_status()
+            print(f"  [setup] Created employee '{first} {last}' (id={resp.json()['value']['id']})")
+
+    def verify_task_14(client: httpx.Client) -> list[VerifyCheck]:
+        checks: list[VerifyCheck] = []
+        # Project exists
+        resp = client.get("project", params={"name": proj_name_14, "count": 5})
+        projs = resp.json().get("values", [])
+        if not projs:
+            return [("project_exists", False, f"No project '{proj_name_14}'")]
+        proj = projs[0]
+        checks.append(("project_exists", True, f"id={proj['id']}"))
+
+        # Both employees are participants
+        resp2 = client.get(
+            f"project/{proj['id']}", params={"fields": "participants(employee(*))"}
+        )
+        participants = resp2.json().get("value", {}).get("participants", [])
+        participant_emails = [p.get("employee", {}).get("email") for p in participants]
+        for email, label in [
+            (emp_email_14a, "participant_a"),
+            (emp_email_14b, "participant_b"),
+        ]:
+            checks.append(
+                (label, email in participant_emails, f"expected {email} in {participant_emails}")
+            )
+
+        # Timesheet entries exist
+        for email, hours, label in [
+            (emp_email_14a, 8, "timesheet_a_8h"),
+            (emp_email_14b, 5, "timesheet_b_5h"),
+        ]:
+            resp_e = client.get("employee", params={"email": email, "count": 1})
+            emps = resp_e.json().get("values", [])
+            if not emps:
+                checks.append((label, False, f"employee {email} not found"))
+                continue
+            emp_id = emps[0]["id"]
+            resp_t = client.get(
+                "timesheet/entry",
+                params={
+                    "employeeId": emp_id,
+                    "dateFrom": "2020-01-01",
+                    "dateTo": "2030-01-01",
+                    "count": 50,
+                },
+            )
+            entries = resp_t.json().get("values", [])
+            has_hours = any(e.get("hours") == hours for e in entries)
+            checks.append(
+                (label, has_hours, f"entries hours: {[e.get('hours') for e in entries]}")
+            )
+        return checks
+
     # --- Task 13.1: Create Customer from PDF attachment (structured file) ---
     cust_name_13 = f"Nordlys Digital {uid} AS"
     org_nr_13 = "6" + uid[:8].translate(str.maketrans("abcdef", "123456"))
@@ -1036,6 +1123,326 @@ def build_tasks() -> list[SyntheticTask]:
                 f"expected {cust_city_13!r}, got {addr.get('city')!r}",
             ),
         ]
+        return checks
+
+    # --- Task 16.1: Expense Reclassification by Account Lookup (German) ---
+    reclass_date = "2026-04-10"
+    reclass_amount_5000 = 32000.0
+    reclass_amount_6000 = 18500.0
+
+    def setup_task_16(client: httpx.Client) -> None:
+        # Get account IDs for 5000 and 6000
+        resp = client.get("ledger/account", params={"number": "5000,6000,1920", "count": 5})
+        resp.raise_for_status()
+        accts = {a["number"]: a["id"] for a in resp.json()["values"]}
+        acct_5000 = accts[5000]
+        acct_6000 = accts[6000]
+        acct_1920 = accts[1920]
+
+        # Create a voucher with a posting to 5000
+        resp = client.post(
+            "ledger/voucher",
+            json={
+                "date": reclass_date,
+                "description": f"Lønnskostnad april {uid}",
+                "postings": [
+                    {
+                        "date": reclass_date,
+                        "account": {"id": acct_5000},
+                        "vatType": {"id": 0},
+                        "amountGross": reclass_amount_5000,
+                        "amountGrossCurrency": reclass_amount_5000,
+                        "row": 1,
+                    },
+                    {
+                        "date": reclass_date,
+                        "account": {"id": acct_1920},
+                        "vatType": {"id": 0},
+                        "amountGross": -reclass_amount_5000,
+                        "amountGrossCurrency": -reclass_amount_5000,
+                        "row": 2,
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        print(f"  [setup] Created voucher 5000 ({reclass_amount_5000} NOK)")
+
+        # Create a voucher with a posting to 6000
+        resp = client.post(
+            "ledger/voucher",
+            json={
+                "date": reclass_date,
+                "description": f"Avskrivning april {uid}",
+                "postings": [
+                    {
+                        "date": reclass_date,
+                        "account": {"id": acct_6000},
+                        "vatType": {"id": 0},
+                        "amountGross": reclass_amount_6000,
+                        "amountGrossCurrency": reclass_amount_6000,
+                        "row": 1,
+                    },
+                    {
+                        "date": reclass_date,
+                        "account": {"id": acct_1920},
+                        "vatType": {"id": 0},
+                        "amountGross": -reclass_amount_6000,
+                        "amountGrossCurrency": -reclass_amount_6000,
+                        "row": 2,
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        print(f"  [setup] Created voucher 6000 ({reclass_amount_6000} NOK)")
+
+    def verify_task_16(client: httpx.Client) -> list[VerifyCheck]:
+        tomorrow = (
+            datetime.strptime(reclass_date, "%Y-%m-%d").replace(tzinfo=UTC)
+            + timedelta(days=1)
+        ).date()
+        resp = client.get(
+            "ledger/voucher",
+            params={
+                "dateFrom": reclass_date,
+                "dateTo": tomorrow.isoformat(),
+                "count": 200,
+            },
+        )
+        vouchers = resp.json().get("values", [])
+
+        # Find a reclassification voucher that debits 5000 and credits 6000
+        # (i.e. moves the 6000 amount into 5000)
+        target = None
+        for v in vouchers:
+            postings = v.get("postings", [])
+            if postings and not postings[0].get("account", {}).get("number"):
+                resp2 = client.get(
+                    f"ledger/voucher/{v['id']}",
+                    params={"fields": "postings(*,account(*))"},
+                )
+                postings = resp2.json().get("value", {}).get("postings", [])
+            acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
+            # Reclassification: touches both 5000 and 6000, but NOT 1920
+            if 5000 in acct_numbers and 6000 in acct_numbers and 1920 not in acct_numbers:
+                target = v
+                target["_postings"] = postings
+                break
+
+        if not target:
+            return [
+                (
+                    "reclass_voucher_exists",
+                    False,
+                    f"No voucher with both 5000 and 6000 (without 1920) among {len(vouchers)} vouchers",
+                ),
+            ]
+
+        postings = target["_postings"]
+        debit_5000 = sum(
+            p.get("amountGross", 0)
+            for p in postings
+            if p.get("account", {}).get("number") == 5000 and p.get("amountGross", 0) > 0
+        )
+        credit_6000 = sum(
+            p.get("amountGross", 0)
+            for p in postings
+            if p.get("account", {}).get("number") == 6000 and p.get("amountGross", 0) < 0
+        )
+        debit_total = sum(p.get("amountGross", 0) for p in postings if p.get("amountGross", 0) > 0)
+        credit_total = sum(p.get("amountGross", 0) for p in postings if p.get("amountGross", 0) < 0)
+
+        checks: list[VerifyCheck] = [
+            ("reclass_voucher_exists", True, f"id={target['id']}"),
+            (
+                "correct_amount",
+                abs(debit_5000 - reclass_amount_6000) < 0.01,
+                f"debit 5000={debit_5000}, expected {reclass_amount_6000}",
+            ),
+            (
+                "correct_credit",
+                abs(credit_6000 + reclass_amount_6000) < 0.01,
+                f"credit 6000={credit_6000}, expected -{reclass_amount_6000}",
+            ),
+            (
+                "balanced",
+                abs(debit_total + credit_total) < 0.01,
+                f"debit={debit_total} credit={credit_total}",
+            ),
+        ]
+        return checks
+
+    # --- Task 15.1: Monthly Closing — Combined Voucher (Portuguese) ---
+    def setup_task_15(client: httpx.Client) -> None:
+        pass  # no setup needed — uses standard chart of accounts
+
+    def verify_task_15(client: httpx.Client) -> list[VerifyCheck]:
+        today = datetime.now(tz=UTC).date()
+        tomorrow = today + timedelta(days=1)
+        resp = client.get(
+            "ledger/voucher",
+            params={
+                "dateFrom": today.isoformat(),
+                "dateTo": tomorrow.isoformat(),
+                "count": 200,
+            },
+        )
+        vouchers = resp.json().get("values", [])
+        # Find voucher(s) that touch both 5000-series (salary) and 6010 (depreciation)
+        matching_vouchers: list[dict] = []
+        for v in vouchers:
+            postings = v.get("postings", [])
+            if postings and not postings[0].get("account", {}).get("number"):
+                resp2 = client.get(
+                    f"ledger/voucher/{v['id']}",
+                    params={"fields": "postings(*,account(*))"},
+                )
+                postings = resp2.json().get("value", {}).get("postings", [])
+            acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
+            has_salary = any(5000 <= n < 6000 for n in acct_numbers)
+            has_depreciation = 6010 in acct_numbers
+            has_accrual = 7700 in acct_numbers or 1710 in acct_numbers
+            if has_salary and has_depreciation:
+                matching_vouchers.append(v)
+                # Re-attach expanded postings for checks
+                v["_postings"] = postings
+
+        if not matching_vouchers:
+            # Check if entries exist spread across multiple vouchers (the bad pattern)
+            salary_vouchers = []
+            depreciation_vouchers = []
+            for v in vouchers:
+                postings = v.get("postings", [])
+                if postings and not postings[0].get("account", {}).get("number"):
+                    resp2 = client.get(
+                        f"ledger/voucher/{v['id']}",
+                        params={"fields": "postings(*,account(*))"},
+                    )
+                    postings = resp2.json().get("value", {}).get("postings", [])
+                acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
+                if any(5000 <= n < 6000 for n in acct_numbers):
+                    salary_vouchers.append(v)
+                if 6010 in acct_numbers:
+                    depreciation_vouchers.append(v)
+            if salary_vouchers and depreciation_vouchers:
+                return [
+                    (
+                        "combined_voucher",
+                        False,
+                        f"Entries exist but in separate vouchers (salary={len(salary_vouchers)}, "
+                        f"depreciation={len(depreciation_vouchers)}). Should be combined into one.",
+                    ),
+                ]
+            return [
+                (
+                    "combined_voucher",
+                    False,
+                    f"No voucher with both salary and depreciation postings among {len(vouchers)} vouchers",
+                ),
+            ]
+
+        target = matching_vouchers[0]
+        postings = target["_postings"]
+        acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
+        has_salary = any(5000 <= n < 6000 for n in acct_numbers)
+        has_depreciation = 6010 in acct_numbers
+
+        debit_total = sum(p.get("amountGross", 0) for p in postings if p.get("amountGross", 0) > 0)
+        credit_total = sum(p.get("amountGross", 0) for p in postings if p.get("amountGross", 0) < 0)
+
+        checks: list[VerifyCheck] = [
+            ("combined_voucher", True, f"id={target['id']}, {len(postings)} postings"),
+            ("has_salary_posting", has_salary, f"accounts: {sorted(acct_numbers)}"),
+            ("has_depreciation_posting", has_depreciation, f"accounts: {sorted(acct_numbers)}"),
+            (
+                "balanced",
+                abs(debit_total + credit_total) < 0.01,
+                f"debit={debit_total} credit={credit_total}",
+            ),
+        ]
+        return checks
+
+    # --- Task 17.1: Custom Accounting Dimension + Voucher (French) ---
+    dim_name_17 = f"Kostsenter {uid}"
+    dim_val_a_17 = f"Økonomi {uid}"
+    dim_val_b_17 = f"IT {uid}"
+
+    def verify_task_17(client: httpx.Client) -> list[VerifyCheck]:
+        # Check dimension name exists
+        resp = client.get("ledger/accountingDimensionName")
+        dim_names = resp.json().get("values", [])
+        dim_match = [d for d in dim_names if d.get("dimensionName") == dim_name_17]
+        if not dim_match:
+            return [("dimension_name_exists", False, f"No dimension named '{dim_name_17}'")]
+        dim = dim_match[0]
+        dim_index = dim["dimensionIndex"]
+
+        # Check dimension values exist
+        resp = client.get(
+            "ledger/accountingDimensionValue",
+            params={"dimensionIndex": dim_index, "count": 50},
+        )
+        vals = resp.json().get("values", [])
+        val_names = {v.get("displayName") for v in vals}
+        has_val_a = dim_val_a_17 in val_names
+        has_val_b = dim_val_b_17 in val_names
+        val_b_id = next((v["id"] for v in vals if v.get("displayName") == dim_val_b_17), None)
+
+        checks: list[VerifyCheck] = [
+            ("dimension_name_exists", True, f"id={dim['id']} index={dim_index}"),
+            ("value_okonomi", has_val_a, f"values: {sorted(val_names)}"),
+            ("value_it", has_val_b, f"values: {sorted(val_names)}"),
+        ]
+
+        # Check voucher on account 6340 with dimension value "IT"
+        today = datetime.now(tz=UTC).date()
+        tomorrow = today + timedelta(days=1)
+        resp = client.get(
+            "ledger/voucher",
+            params={"dateFrom": today.isoformat(), "dateTo": tomorrow.isoformat(), "count": 200},
+        )
+        vouchers = resp.json().get("values", [])
+        dim_field = f"freeAccountingDimension{dim_index}"
+        target = None
+        for v in vouchers:
+            postings = v.get("postings", [])
+            if postings and not postings[0].get("account", {}).get("number"):
+                resp2 = client.get(
+                    f"ledger/voucher/{v['id']}",
+                    params={"fields": f"postings(*,account(number),{dim_field}(*))"},
+                )
+                postings = resp2.json().get("value", {}).get("postings", [])
+            for p in postings:
+                acct_num = p.get("account", {}).get("number", 0)
+                dim_val = p.get(dim_field)
+                if acct_num == 6340 and dim_val and dim_val.get("id") == val_b_id:
+                    target = v
+                    target["_postings"] = postings
+                    break
+            if target:
+                break
+
+        if not target:
+            checks.append(
+                ("voucher_with_dimension", False, f"No voucher on 6340 with {dim_field}=IT among {len(vouchers)} vouchers")
+            )
+            return checks
+
+        postings = target["_postings"]
+        debit_6340 = sum(
+            p.get("amountGross", 0)
+            for p in postings
+            if p.get("account", {}).get("number") == 6340 and p.get("amountGross", 0) > 0
+        )
+        checks.extend([
+            ("voucher_with_dimension", True, f"id={target['id']}"),
+            (
+                "correct_amount",
+                abs(debit_6340 - 5050) < 0.01,
+                f"debit 6340={debit_6340}, expected 5050",
+            ),
+        ])
         return checks
 
     return [
@@ -1210,6 +1617,72 @@ def build_tasks() -> list[SyntheticTask]:
             # POST /customer = 1
             "optimal": 1,
             "best": 1,
+        },
+        {
+            "name": "14.1 Project + Timesheet 2 Employees (Norwegian)",
+            "prompt": (
+                f'Opprett prosjektet "{proj_name_14}" (internt). '
+                f"Opprett aktiviteten \"{activity_name_14}\" og koble den til prosjektet. "
+                f"Legg til {emp_first_14a} {emp_last_14a} ({emp_email_14a}) og "
+                f"{emp_first_14b} {emp_last_14b} ({emp_email_14b}) som deltakere. "
+                f"Registrer 8 timer for {emp_first_14a} og 5 timer for {emp_first_14b} "
+                f"den 15. april 2026 på aktiviteten."
+            ),
+            "setup": setup_task_14,
+            "verify": verify_task_14,
+            # GET employee(email1) + GET employee(email2) + GET whoAmI
+            # + POST activity + POST project(inline participants+activity)
+            # + POST timesheet/entry(A) + POST timesheet/entry(B) = 7
+            "optimal": 7,
+            "best": 7,
+        },
+        {
+            "name": "15.1 Monthly Closing — Combined Voucher (Portuguese)",
+            "prompt": (
+                "Realize o fecho mensal de março 2026 com as seguintes três operações num único lançamento manual "
+                "com data de hoje:\n"
+                "1. Reversão de acréscimo: débito conta 7700, crédito conta 1710, valor 5000 NOK\n"
+                "2. Depreciação: débito conta 6010, crédito conta 1710, valor 2656.25 NOK\n"
+                "3. Provisão salarial: débito conta 5000, crédito conta 2900, valor 50000 NOK\n"
+                "Todas as operações devem ser registadas num único voucher."
+            ),
+            "setup": setup_task_15,
+            "verify": verify_task_15,
+            # GET /ledger/account?number=7700,1710,6010,5000,2900 + POST /ledger/voucher = 2
+            "optimal": 2,
+            "best": 2,
+        },
+        {
+            "name": "16.1 Expense Reclassification from Postings (German)",
+            "prompt": (
+                f"Am {reclass_date} wurden Buchungen auf Konto 5000 (Lönn til ansatte) und "
+                f"Konto 6000 (Avskrivning) verbucht. "
+                f"Ermitteln Sie den Gesamtbetrag der Buchungen auf Konto 6000 an diesem Datum "
+                f"und erstellen Sie einen Umgliederungsbeleg (Datum {reclass_date}), "
+                f"der diesen Betrag von Konto 6000 auf Konto 5000 umbucht."
+            ),
+            "setup": setup_task_16,
+            "verify": verify_task_16,
+            # GET /ledger/account?number=5000,6000 (1)
+            # + GET /ledger/posting?accountId=6000_id (1)
+            # + POST /ledger/voucher (1) = 3
+            "optimal": 3,
+            "best": 3,
+        },
+        {
+            "name": "17.1 Accounting Dimension + Voucher (French)",
+            "prompt": (
+                f'Créez une dimension comptable personnalisée "{dim_name_17}" avec les valeurs '
+                f'"{dim_val_a_17}" et "{dim_val_b_17}". '
+                f"Puis comptabilisez une pièce sur le compte 6340 pour 5050 NOK, "
+                f'liée à la valeur de dimension "{dim_val_b_17}".'
+            ),
+            "verify": verify_task_17,
+            # POST /ledger/accountingDimensionName (1)
+            # + POST /ledger/accountingDimensionValue x2 (2)
+            # + GET /ledger/account?number=6340,1920 (1)
+            # + POST /ledger/voucher (1) = 5
+            "optimal": 5,
         },
     ]
 
@@ -1598,8 +2071,8 @@ def print_summary(results: list[dict]) -> None:
             vfy = "-"
         calls = r["api_calls"] if r.get("api_calls") is not None else "-"
         errs = r["errors"] if r.get("errors") is not None else "-"
-        best = r.get("best", "-")
-        opt = r.get("optimal", "-")
+        best = r.get("best") if r.get("best") is not None else "-"
+        opt = r.get("optimal") if r.get("optimal") is not None else "-"
         print(
             f"  {r['name']:<40} {st:<6} {vfy:<8} {calls:>5} {errs:>4} {best:>5} {opt:>4} {r['elapsed_s']:>6.1f}s",
         )

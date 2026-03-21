@@ -19,7 +19,7 @@ NOT raw integers. Applies to all foreign key fields: `customer`, `employee`, `de
   "values": [...]
 }
 ```
-Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fields, but avoid it unless you are certain of the exact DTO field names — wrong names cause HTTP 400, wasting a call.
+Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fields, but avoid it unless you are certain of the exact DTO field names — wrong names cause HTTP 400, wasting a call. **Do NOT put envelope fields** like `total`, `values`, `fullResultSize`, `from`, or `versionDigest` in the `fields` filter — those wrap the response, not the DTO. Use DTO field names directly (e.g. `id,date,account(id,number,name),amountGross`).
 
 **Nested field expansion:** To expand sub-objects in a single call, use nested `fields` syntax: `?fields=postings(*,account(*))`. This returns both the posting fields and the expanded account object. Without this, nested references are returned as stubs (just `id` and `url`).
 

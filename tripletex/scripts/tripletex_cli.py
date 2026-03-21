@@ -131,6 +131,25 @@ def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
                     ),
                 )
                 return
+    if params and "accountId" in params and "," in str(params["accountId"]):
+        print(
+            json.dumps(
+                {"error": "accountId does not support comma-separated values (returns 404). Make one request per accountId instead."},
+            ),
+        )
+        return
+    # Block "total" and "values" in the fields filter — response envelope
+    # fields, never valid DTO fields. Verified across 12 endpoints (T275a-T275x).
+    if params and "fields" in params:
+        top_level = {f.split("(")[0].strip() for f in str(params["fields"]).split(",")}
+        bad = {"total", "values"} & top_level
+        if bad:
+            print(
+                json.dumps(
+                    {"error": f"Invalid fields filter: {', '.join(sorted(bad))} are response envelope fields, not DTO fields. Use DTO field names directly, e.g. 'id,date,account(id,number,name),amountGross'."},
+                ),
+            )
+            return
     try:
         resp = _retry_request(client.get, path, params=params)
     except httpx.HTTPStatusError as e:
