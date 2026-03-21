@@ -277,8 +277,12 @@ def _build_predictor(name: str, ground_truth: NDArray[np.float64] | None = None)
             msg = "PerfectPredictor requires ground truth"
             raise ValueError(msg)
         return PerfectPredictor(ground_truth)
+    if name == "rulesim":
+        from astar_island.predictor import RuleSimPredictor  # noqa: PLC0415
 
-    msg = f"Unknown predictor: {name!r}. Choose from: diffusion, empty, uniform, perfect"
+        return RuleSimPredictor()
+
+    msg = f"Unknown predictor: {name!r}. Choose from: diffusion, empty, uniform, perfect, rulesim"
     raise ValueError(msg)
 
 
@@ -290,7 +294,7 @@ def main() -> None:
     parser.add_argument(
         "--predictor",
         default="diffusion",
-        choices=["diffusion", "empty", "uniform", "perfect"],
+        choices=["diffusion", "empty", "uniform", "perfect", "rulesim"],
         help="Predictor to benchmark (default: diffusion)",
     )
     parser.add_argument(
