@@ -50,12 +50,12 @@ def patch_load() -> None:
     """Use 'weight_only = False' for PyTorch 2.6 loading."""
     _original_load = torch.load
 
-    def patched_load(*args, **kwargs):
+    def patched_load(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         if "weights_only" not in kwargs:
             kwargs["weights_only"] = False
         return _original_load(*args, **kwargs)
 
-    torch.load = patched_load
+    torch.load = patched_load  # ty: ignore[invalid-assignment]
 
 
 def load_yolo_model(weights: str | Path) -> YOLO:
@@ -87,7 +87,7 @@ def find_detection_pretrained_weights(
 
 
 @contextmanager
-def working_directory(path: Path) -> Generator[None, Any, None]:
+def working_directory(path: Path) -> Generator[None, Any]:
     """Temporarily switch cwd so Ultralytics side-effect downloads stay contained."""
     previous = Path.cwd()
     os.chdir(path)

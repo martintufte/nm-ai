@@ -111,14 +111,11 @@ GRID_VALUE_TO_CLASS = {
 
 
 def find_coastal_cells(water_mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
-    """Find land cells adjacent (8-connected) to water."""
+    """Find land cells adjacent (4-connected) to water."""
     coastal = np.zeros((MAP_SIZE, MAP_SIZE), dtype=bool)
-    for dy in [-1, 0, 1]:
-        for dx in [-1, 0, 1]:
-            if dy == 0 and dx == 0:
-                continue
-            shifted = np.roll(np.roll(water_mask, dy, axis=0), dx, axis=1)
-            coastal |= shifted
+    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        shifted = np.roll(np.roll(water_mask, dy, axis=0), dx, axis=1)
+        coastal |= shifted
     return coastal & ~water_mask
 
 

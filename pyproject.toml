@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = "==3.13.*"
 
 dependencies = [
+    "dotenv>=0.9.9",
+    "numpy>=2.4.3",
+    "pre-commit>=4.5.1",
+    "ty>=0.0.24",
     "ultralytics>=8.4.24",
 ]
 
