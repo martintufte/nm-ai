@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 from astar_island.client import N_CLASSES
 from astar_island.client import RoundData
+from astar_island.client import ViewPortData
 from astar_island.rules import GameRules
 
 
@@ -143,9 +144,7 @@ class IslandModel:
     query_counts: dict[int, NDArray[np.int32]]
     predictor: IslandPredictor
     rules: GameRules = field(default_factory=GameRules)
-    observed_viewports: list[tuple[int, int, int, NDArray[np.int16]]] = field(
-        default_factory=list,
-    )
+    observed_viewports: list[ViewPortData] = field(default_factory=list)
 
     @classmethod
     def from_round_data(cls, round_data: RoundData, predictor: IslandPredictor) -> "IslandModel":
@@ -178,36 +177,29 @@ class IslandModel:
         )
         return self.rules.enforce_probs(probs, self.initial_grids[seed_index])
 
-    def update(
-        self,
-        seed_index: int,
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> None:
+    def update(self, result: ViewPortData) -> None:
         """Update model state after observing a viewport."""
+        viewport_grid = result.grid.tolist()
+
         self.rules.validate(
-            initial_grid=self.initial_grids[seed_index],
+            initial_grid=self.initial_grids[result.seed_index],
             viewport_grid=viewport_grid,
-            viewport_x=viewport_x,
-            viewport_y=viewport_y,
-            seed_index=seed_index,
+            viewport_x=result.viewport_x,
+            viewport_y=result.viewport_y,
+            seed_index=result.seed_index,
         )
-        self.probs[seed_index] = self.predictor.update(
-            seed_state=self.initial_states[seed_index],
-            probs=self.probs[seed_index],
+        self.probs[result.seed_index] = self.predictor.update(
+            seed_state=self.initial_states[result.seed_index],
+            probs=self.probs[result.seed_index],
             viewport_grid=viewport_grid,
-            viewport_x=viewport_x,
-            viewport_y=viewport_y,
+            viewport_x=result.viewport_x,
+            viewport_y=result.viewport_y,
         )
 
         # Increment per-cell query counter
-        vh, vw = len(viewport_grid), len(viewport_grid[0])
-        self.query_counts[seed_index][
-            viewport_y : viewport_y + vh,
-            viewport_x : viewport_x + vw,
+        self.query_counts[result.seed_index][
+            result.viewport_y : result.viewport_y + result.viewport_h,
+            result.viewport_x : result.viewport_x + result.viewport_w,
         ] += 1
 
-        self.observed_viewports.append(
-            (seed_index, viewport_x, viewport_y, np.array(viewport_grid, dtype=np.int16)),
-        )
+        self.observed_viewports.append(result)

@@ -172,7 +172,7 @@ def run_experiment(
         queries = select_queries(model)
         for seed_idx, x, y in queries:
             result = sim.simulate(sim.round_id, seed_idx, x, y)
-            model.update(seed_idx, result["grid"], result["x"], result["y"])
+            model.update(result)
 
         LOGGER.info("Ran %d queries", len(queries))
 

@@ -20,6 +20,7 @@ from astar_island.client import BudgetData
 from astar_island.client import RoundData
 from astar_island.client import SeedData
 from astar_island.client import Settlement
+from astar_island.client import ViewPortData
 from astar_island.fetch_data import load_round
 from astar_island.metrics import entropy_weighted_kl_score
 
@@ -143,7 +144,7 @@ class AstarIslandSimulator:
             active=self.queries_used < self.queries_max,
         )
 
-    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> dict:
+    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> ViewPortData:
         """Sample a viewport realization from the ground truth distribution.
 
         Args:
@@ -153,7 +154,7 @@ class AstarIslandSimulator:
             y: Top-left y coordinate of viewport.
 
         Returns:
-            Dict with "grid" (list[list[int]]) matching the real API format.
+            ViewPortData with sampled grid and viewport bounds.
 
         Raises:
             ValueError: If budget is exhausted or coordinates are out of bounds.
@@ -189,11 +190,15 @@ class AstarIslandSimulator:
             self.queries_max,
         )
 
-        return {
-            "grid": grid.tolist(),
-            "x": x,
-            "y": y,
-        }
+        return ViewPortData(
+            round_id=round_id,
+            seed_index=seed_index,
+            viewport_x=x,
+            viewport_y=y,
+            viewport_w=VIEWPORT_SIZE,
+            viewport_h=VIEWPORT_SIZE,
+            grid=grid,
+        )
 
     def score(self, predictions: dict[int, NDArray[np.float64]]) -> dict[int, float]:
         """Score predictions against ground truth for all seeds.
