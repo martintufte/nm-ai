@@ -19,16 +19,12 @@ TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 PACKAGED_RUN_PY_TEMPLATE = '''"""Norgesgruppen grocery product detection submission entry point."""
 
 import argparse
-import inspect
 import json
 import logging
-from collections import OrderedDict
 from pathlib import Path
 
 import torch
 from ultralytics import YOLO
-from ultralytics.nn import modules as ultralytics_modules
-from ultralytics.nn import tasks as ultralytics_tasks
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,35 +34,26 @@ IMG_SIZE = __IMG_SIZE__
 MAX_DETECTIONS = __MAX_DETECTIONS__
 
 
-def allowlist_ultralytics_checkpoint_classes() -> None:
-    """Allow trusted Ultralytics checkpoint classes for PyTorch 2.6+ loading."""
-    add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
-    if add_safe_globals is None:
-        return
+def patch_load() -> None:
+    """Use 'weight_only = False' for PyTorch 2.6 loading."""
+    _original_load = torch.load
 
-    safe_classes = []
-    for module in (ultralytics_tasks, ultralytics_modules):
-        for value in vars(module).values():
-            if inspect.isclass(value):
-                safe_classes.append(value)
+    def patched_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return _original_load(*args, **kwargs)
 
-    for value in vars(torch.nn).values():
-        if inspect.isclass(value):
-            safe_classes.append(value)
-
-    safe_classes.append(OrderedDict)
-    add_safe_globals(safe_classes)
+    torch.load = patched_load
 
 
 def load_model(weights_dir: Path) -> YOLO:
     """Load YOLO model from packaged weights."""
-    allowlist_ultralytics_checkpoint_classes()
-    for name in ["best.pt", "model.pt"]:
-        weights_path = weights_dir / name
-        if weights_path.exists():
-            model = YOLO(str(weights_path))
-            model.fuse()
-            return model
+    patch_load()
+    weights_path = weights_dir / "best.pt"
+    if weights_path.exists():
+        model = YOLO(str(weights_path))
+        model.fuse()
+        return model
     raise FileNotFoundError(f"No model weights found in {weights_dir}")
 
 

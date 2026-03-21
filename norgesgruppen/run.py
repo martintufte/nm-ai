@@ -44,10 +44,8 @@ def allowlist_ultralytics_checkpoint_classes() -> None:
         return
 
     safe_classes = []
-    for module in (ultralytics_tasks, ultralytics_modules):
-        safe_classes.extend([value for value in vars(module).values() if inspect.isclass(value)])
-
-    safe_classes.extend([value for value in vars(torch.nn).values() if inspect.isclass(value)])
+    for module in (ultralytics_tasks, ultralytics_modules, torch.nn):
+        safe_classes.extend([member for _, member in inspect.getmembers(module, inspect.isclass)])
 
     safe_classes.append(OrderedDict)
     add_safe_globals(safe_classes)

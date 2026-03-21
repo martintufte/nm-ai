@@ -16,11 +16,9 @@ Usage:
 """
 
 import argparse
-import inspect
 import json
 import logging
 import os
-from collections import OrderedDict
 from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -31,8 +29,6 @@ from typing import Any
 
 import torch
 from ultralytics import YOLO
-from ultralytics.nn import modules as ultralytics_modules
-from ultralytics.nn import tasks as ultralytics_tasks
 
 from norgesgruppen.data.convert import convert_coco_to_yolo
 from norgesgruppen.evaluate import evaluate_map
@@ -46,30 +42,48 @@ DATA_DIR = Path(__file__).parent / "data"
 ANNOTATIONS_PATH = DATA_DIR / "NM_NGD_coco_dataset" / "train" / "annotations.json"
 
 # Threshold grids for post-training sweep
-CONF_THRESHOLDS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5]
-IOU_THRESHOLDS = [0.3, 0.4, 0.45, 0.5, 0.6, 0.7]
+CONF_THRESHOLDS = [0.09, 0.1, 0.125, 0.15, 0.2, 0.25]
+IOU_THRESHOLDS = [0.5, 0.6, 0.65, 0.7, 0.75]
 
 
-def allowlist_ultralytics_checkpoint_classes() -> None:
-    """Allow trusted Ultralytics checkpoint classes for PyTorch 2.6+ loading."""
-    add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
-    if add_safe_globals is None:
-        return
+def patch_load() -> None:
+    """Use 'weight_only = False' for PyTorch 2.6 loading."""
+    _original_load = torch.load
 
-    safe_classes = []
-    for module in (ultralytics_tasks, ultralytics_modules):
-        safe_classes.extend([value for value in vars(module).values() if inspect.isclass(value)])
+    def patched_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return _original_load(*args, **kwargs)
 
-    safe_classes.extend([value for value in vars(torch.nn).values() if inspect.isclass(value)])
-
-    safe_classes.append(OrderedDict)
-    add_safe_globals(safe_classes)
+    torch.load = patched_load
 
 
-def load_yolo_model(weights: str) -> YOLO:
+def load_yolo_model(weights: str | Path) -> YOLO:
     """Load a YOLO model with PyTorch 2.6 checkpoint allowlisting applied."""
-    allowlist_ultralytics_checkpoint_classes()
-    return YOLO(weights)
+    patch_load()
+    return YOLO(str(weights))
+
+
+def _derive_variant_suffix(model_variant: str) -> str:
+    normalized = model_variant.lower()
+    prefix = "yolo"
+    normalized = normalized.removeprefix(prefix)
+    return normalized or model_variant
+
+
+def find_detection_pretrained_weights(
+    model_variant: str,
+    model_size: str,
+    imgsz: int,
+) -> Path | None:
+    """Find a detection checkpoint that matches the requested setup, if available."""
+    suffix = _derive_variant_suffix(model_variant)
+    candidate = WEIGHTS_DIR / f"detect_{suffix}{model_size}_{imgsz}.pt"
+    if candidate.exists():
+        return candidate
+
+    candidates = sorted(WEIGHTS_DIR.glob(f"detect_{suffix}{model_size}_*.pt"))
+    return candidates[-1] if candidates else None
 
 
 @contextmanager
@@ -136,6 +150,13 @@ def run_experiment(
     exp_dir = EXPERIMENTS_DIR / f"{timestamp}_{name}"
     exp_dir.mkdir(parents=True, exist_ok=True)
 
+    resolved_pretrained_weights = pretrained_weights
+    if resolved_pretrained_weights is None and multi_class:
+        detected = find_detection_pretrained_weights(model_variant, model_size, imgsz)
+        if detected is not None:
+            LOGGER.info("Auto-using pretrained detection weights: %s", detected)
+            resolved_pretrained_weights = str(detected)
+
     config = {
         "name": name,
         "timestamp": timestamp,
@@ -145,7 +166,7 @@ def run_experiment(
         "imgsz": imgsz,
         "batch": batch,
         "multi_class": multi_class,
-        "pretrained_weights": pretrained_weights,
+        "pretrained_weights": resolved_pretrained_weights,
         "max_detections": max_detections,
         "mosaic": mosaic,
         "mixup": mixup,
@@ -173,9 +194,9 @@ def run_experiment(
 
     # Step 2: Train
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-    if pretrained_weights:
-        LOGGER.info("Loading pretrained: %s", pretrained_weights)
-        model = load_yolo_model(pretrained_weights)
+    if resolved_pretrained_weights:
+        LOGGER.info("Loading pretrained: %s", resolved_pretrained_weights)
+        model = load_yolo_model(resolved_pretrained_weights)
     else:
         model_name = f"{model_variant}{model_size}.pt"
         # Download pretrained weights to weights/ dir, not cwd
