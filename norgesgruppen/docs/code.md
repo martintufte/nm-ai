@@ -27,7 +27,6 @@ uv run python -m norgesgruppen.experiment train --name detect_v8m_1280_lowlr --m
 
 ```bash
 uv run python -m norgesgruppen.experiment train --name classify_v8m_1280 --model-size n --epochs 120 --imgsz 1280 --batch -1 --patience 30 --multi-class
-uv run python -m norgesgruppen.experiment train --name classify_v8m_1280_scratch --model-size n --epochs 120 --imgsz 1280 --batch -1 --patience 30 --multi-class --lr0 0.001
 ```
 
 * Improves final score to around 0.81
