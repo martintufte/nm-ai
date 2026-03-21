@@ -17,11 +17,11 @@ from astar_island.rules import GameRules
 RAW_VALUE_TO_CLASS = {
     10: 0,  # ocean/water
     11: 0,  # plains/empty land
-    1: 1,   # settlement
-    2: 2,   # port
-    3: 3,   # ruin
-    4: 4,   # forest
-    5: 5,   # mountain
+    1: 1,  # settlement
+    2: 2,  # port
+    3: 3,  # ruin
+    4: 4,  # forest
+    5: 5,  # mountain
 }
 
 
@@ -83,65 +83,18 @@ def create_seed_state(seed_index: int, raw_grid: NDArray[np.int16]) -> SeedState
     )
 
 
-def create_empty_probs(h: int, w: int, n_seeds: int) -> dict[int, NDArray[np.float64]]:
-    """Create initial probability arrays with all mass on the empty class (index 0).
-
-    Args:
-        h: Map height.
-        w: Map width.
-        n_seeds: Number of seeds.
-
-    Returns:
-        Dict mapping seed_index to (H, W, 6) arrays with prob 1.0 on class 0.
-    """
-    probs = {}
-    for seed_idx in range(n_seeds):
-        p = np.zeros((h, w, N_CLASSES), dtype=np.float64)
-        p[:, :, 0] = 1.0
-        probs[seed_idx] = p
-
-    return probs
-
-
 class IslandPredictor(ABC):
     @abstractmethod
-    def predict(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
-        """Return raw predictions for a seed given its current probability state.
+    def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
+        """Return raw predictions for a seed.
 
         Rule enforcement and min probability floor are applied by IslandModel.
 
         Args:
             seed_state: Initial board state for this seed.
-            probs: Current (H, W, 6) probability array.
 
         Returns:
             (H, W, 6) probability array, each cell sums to 1.0.
-        """
-
-    @abstractmethod
-    def update(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> NDArray[np.float64]:
-        """Update probability state after observing a viewport query result.
-
-        Args:
-            seed_state: Initial board state for this seed.
-            probs: Current (H, W, 6) probability array.
-            viewport_grid: Observed final-state grid.
-            viewport_x: Top-left x coordinate of viewport.
-            viewport_y: Top-left y coordinate of viewport.
-
-        Returns:
-            Updated (H, W, 6) probability array.
         """
 
 
@@ -151,7 +104,6 @@ class IslandModel:
 
     initial_states: list[SeedState]
     initial_grids: list[NDArray[np.int16]]
-    probs: dict[int, NDArray[np.float64]]
     query_counts: dict[int, NDArray[np.int32]]
     predictor: IslandPredictor
     rules: GameRules = field(default_factory=GameRules)
@@ -167,14 +119,11 @@ class IslandModel:
             for seed_idx, seed_data in enumerate(round_data.seeds)
         ]
         initial_grids = [seed_data.grid for seed_data in round_data.seeds]
-
-        probs = create_empty_probs(h=h, w=w, n_seeds=round_data.seeds_count)
         query_counts = {i: np.zeros((h, w), dtype=np.int32) for i in range(round_data.seeds_count)}
 
         return cls(
             initial_states=initial_states,
             initial_grids=initial_grids,
-            probs=probs,
             query_counts=query_counts,
             predictor=predictor,
             rules=GameRules(),
@@ -182,29 +131,17 @@ class IslandModel:
 
     def predict(self, seed_index: int) -> NDArray[np.float64]:
         """Generate predictions for a seed, then enforce rules and min probability."""
-        probs = self.predictor.predict(
-            seed_state=self.initial_states[seed_index],
-            probs=self.probs[seed_index],
-        )
+        probs = self.predictor.predict(seed_state=self.initial_states[seed_index])
         return self.rules.enforce_probs(probs, self.initial_grids[seed_index])
 
     def update(self, result: ViewPortData) -> None:
         """Update model state after observing a viewport."""
-        viewport_grid = result.grid.tolist()
-
         self.rules.validate(
             initial_grid=self.initial_grids[result.seed_index],
-            viewport_grid=viewport_grid,
+            viewport_grid=result.grid.tolist(),
             viewport_x=result.viewport_x,
             viewport_y=result.viewport_y,
             seed_index=result.seed_index,
-        )
-        self.probs[result.seed_index] = self.predictor.update(
-            seed_state=self.initial_states[result.seed_index],
-            probs=self.probs[result.seed_index],
-            viewport_grid=viewport_grid,
-            viewport_x=result.viewport_x,
-            viewport_y=result.viewport_y,
         )
 
         # Increment per-cell query counter

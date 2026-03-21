@@ -45,8 +45,9 @@ def _save_heatmaps(
     seed_idx: int,
     ground_truth: NDArray[np.float64],
     predictions: NDArray[np.float64],
+    observed: NDArray[np.float64] | None = None,
 ) -> None:
-    """Save ground truth and prediction heatmaps for a single seed."""
+    """Save ground truth, prediction, and observed heatmaps for a single seed."""
     seed_dir = exp_dir / f"seed_{seed_idx}"
     seed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,6 +90,26 @@ def _save_heatmaps(
         facecolor=fig.get_facecolor(),
     )
     plt.close(fig)
+
+    # Observed probs heatmaps (only when queries were run)
+    if observed is not None:
+        fig = plot_heatmap_grid(observed, suptitle=f"Seed {seed_idx} — Observed")
+        fig.savefig(
+            seed_dir / "obs_channels.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
+
+        fig = plot_heatmap_combined(observed, title=f"Seed {seed_idx} — Observed Combined")
+        fig.savefig(
+            seed_dir / "obs_combined.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
 
 
 def _save_score_summary(
@@ -204,11 +225,13 @@ def run_experiment(
 
     # Save heatmaps per seed
     for seed_idx in range(round_data.seeds_count):
+        observed = model.observed_probs(seed_idx) if n_queries > 0 else None
         _save_heatmaps(
             exp_dir,
             seed_idx,
             ground_truth=sim.ground_truth[seed_idx],
             predictions=predictions[seed_idx],
+            observed=observed,
         )
 
     # Save score summary chart
