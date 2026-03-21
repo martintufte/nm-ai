@@ -26,8 +26,14 @@ OrderLines within order require:
 
 | Field | Required? | Notes |
 |-------|-----------|-------|
-| `product` | Yes | `{"id": PROD_ID}` |
 | `count` | Yes | quantity |
+| `product` | No | `{"id": PROD_ID}` — optional if you set `description` + `unitPriceExcludingVatCurrency` directly |
+
+**Product-free order lines** — you can skip the product lookup/creation entirely:
+```json
+{"description": "Consulting 11h @ 1850 NOK", "count": 11, "unitPriceExcludingVatCurrency": 1850}
+```
+This saves a GET or POST call for the product.
 
 Optional invoice fields: `invoiceNumber` (int32, 0 = auto-generate), `kid` (string — KID customer ID number), `comment` (string), `currency` (Currency ref), `voucher` (Voucher ref), `invoiceRemarks` (string — deprecated, use `invoiceRemark`), `invoiceRemark` (InvoiceRemark ref), `paymentTypeId` (int32 — [BETA] prepaid invoice payment type), `paidAmount` (number — [BETA] prepaid amount), `ehfSendStatus` (string — [Deprecated] EHF/Peppol status).
 

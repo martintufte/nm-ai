@@ -79,7 +79,12 @@ ignore = [
     "S106",     # hardcoded-password-func-arg
     "S607",     # start-process-with-partial-path
     "S301",     # suspicious-pickle-usage
+    "ANN401",   # dynamically-typed-expressions: *args/**kwargs commonly need Any
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["T201", "INP001"]
+"tripletex/scripts/run_synthetic_tasks.py" = ["T201"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

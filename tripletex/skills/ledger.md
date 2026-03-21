@@ -74,10 +74,12 @@ POST /ledger/voucher
 - Debit: 5000-series (salary expense, e.g. 5000 "Lønn") — total gross salary
 - Credit: 2920 or 2900-series (salary payable, e.g. 2920 "Påløpt lønn") — negative amount matching debit
 - `vatType`: `{"id": 0}` (no VAT on salary)
-- Look up account IDs via `GET /ledger/account?number=5000&count=5` and `GET /ledger/account?number=2900&count=5`
+- Look up both account IDs in a single call: `GET /ledger/account?number=5000,2920&count=5` — the `number` param accepts comma-separated values. One call instead of two.
 
 ### GET /ledger/voucher
-Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(required)**, `dateTo` **(required)**
+Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(required)**, `dateTo` **(required, exclusive)**
+
+**Note:** `dateTo` is exclusive — to query a single day, use the next day as `dateTo`. Postings in list results are stubs; use `GET /ledger/voucher/{id}?fields=postings(*,account(*))` to get full posting details with account numbers.
 
 ### GET /ledger/voucher/{id}
 ### PUT /ledger/voucher/{id} — update voucher (postings with guiRow==0 are deleted and recreated)

@@ -35,13 +35,12 @@ Parse the task prompt, determine the required Tripletex API operations, and exec
 - Departments
 - Corrections and deletions
 
-## Planning
+## Planning (MANDATORY)
 
-You must plan your API calls before executing them. API calls must be checked against your knowledge base of the API.
+You **must** plan and review before making ANY Tripletex API call. No GETs, no POSTs, nothing — until the plan is reviewed. `read_skill` and `review-plan` are free tools, not API calls.
 
-## Pre-flight (MANDATORY before POST/PUT)
-
-1. Call `read_skill("_general")` if you haven't already this task
-2. Call `read_skill("<entity>")` for the entity you're about to create/update
-3. Verify your payload matches the required fields and avoids the documented gotchas
-4. Only then make the API call
+1. **Read skills**: Call `read_skill("_general")` and `read_skill("<entity>")` for every entity you'll create or update. This gives you required fields, gotchas, and inline capabilities you need to draft a correct plan.
+2. **Draft**: List **every** API call you intend to make — GETs, POSTs, PUTs, DELETEs — with endpoints, methods, and key parameters. Every lookup counts.
+3. **Review**: Call `review-plan` with your full draft. The reviewer will flag calls that can be eliminated. This is mandatory.
+4. **Revise**: If the reviewer identified calls that can be eliminated, rewrite your plan to incorporate those changes. This is your final plan.
+5. **Execute**: Execute your final plan exactly as written. Do not add, remove, or change API calls at execution time — if you discover your plan needs adjustment, stop and re-review before continuing.

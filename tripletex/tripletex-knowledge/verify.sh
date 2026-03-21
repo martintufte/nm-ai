@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Tripletex Knowledge Base Verification Suite
 # Tests every documented gotcha and unverified gap against the sandbox API.
-# Usage: TRIPLETEX_SANDBOX_API_URL=... TRIPLETEX_SANBOX_TOKEN=... bash verify.sh
+# Usage: TRIPLETEX_SANDBOX_API_URL=... TRIPLETEX_SANDBOX_TOKEN=... bash verify.sh
 set -uo pipefail
 
 BASE="${TRIPLETEX_SANDBOX_API_URL:?Set TRIPLETEX_SANDBOX_API_URL}"
-TOKEN="${TRIPLETEX_SANBOX_TOKEN:?Set TRIPLETEX_SANBOX_TOKEN}"
+TOKEN="${TRIPLETEX_SANDBOX_TOKEN:?Set TRIPLETEX_SANDBOX_TOKEN}"
 
 # --- Counters ---
 PASS=0; XFAIL=0; FAIL=0; SKIP=0
@@ -147,6 +147,22 @@ print(dept.get('id',''))
 " 2>/dev/null)
 record PASS T00 "GET /employee" "EMP_ID=${IDS[EMP_ID]}, DEPT_ID=${IDS[DEPT_ID]}"
 
+# T00b: Ensure VAT registration (required for outgoing VAT codes like id=3)
+api GET "ledger/vatSettings"
+VAT_ID=$(extract_id)
+VAT_VER=$(extract_version)
+VAT_STATUS=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['value']['vatRegistrationStatus'])" 2>/dev/null)
+if [ "$VAT_STATUS" != "VAT_REGISTERED" ]; then
+  api PUT "ledger/vatSettings" "{\"id\":$VAT_ID,\"version\":$VAT_VER,\"vatRegistrationStatus\":\"VAT_REGISTERED\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    record PASS T00b "Enable VAT registration" "was $VAT_STATUS"
+  else
+    record FAIL T00b "Enable VAT registration" "got $LAST_CODE"
+  fi
+else
+  record PASS T00b "VAT already registered" "$VAT_STATUS"
+fi
+
 # T01: Payment types for invoicing
 api GET "invoice/paymentType?count=5"
 IDS[PAY_TYPE_ID]=$(extract_first_id)
@@ -271,13 +287,18 @@ echo ""
 # ======================================================================
 echo "=== PHASE 4: Product gotchas ==="
 
-# T40: Product with vatType id=3 → 422 (gotcha #4)
+# T40: Product with vatType id=3 (outgoing 25%) → 201 when VAT registered
 api POST product "{\"name\":\"VatTest3 $TS\",\"vatType\":{\"id\":3}}"
-expect_fail T40 "POST /product (vatType id=3) [gotcha #4]"
+expect_success T40 "POST /product (vatType id=3, outgoing 25%)"
+IDS[PROD_VAT3_ID]=$(extract_id)
 
-# T41: Product with vatType id=1 → 422 (gotcha #4)
+# T40b: Product with vatType id=31 (outgoing 15%) → 201 when VAT registered
+api POST product "{\"name\":\"VatTest31 $TS\",\"vatType\":{\"id\":31}}"
+expect_success T40b "POST /product (vatType id=31, outgoing 15%)"
+
+# T40c: Product with vatType id=1 (ingoing 25%) → 201 when VAT registered
 api POST product "{\"name\":\"VatTest1 $TS\",\"vatType\":{\"id\":1}}"
-expect_fail T41 "POST /product (vatType id=1) [gotcha #4]"
+expect_success T40c "POST /product (vatType id=1, ingoing 25%)"
 
 # T42: Product without vatType → 201
 api POST product "{\"name\":\"NoVat Product $TS\"}"
@@ -1138,6 +1159,36 @@ else
   record SKIP T135b "POST /order/orderline" "no order"
 fi
 
+# T136: Order with mixed VAT order lines (requires VAT registration)
+if [ -n "${IDS[CUST_ID]:-}" ]; then
+  api POST order "{\"orderDate\":\"$TODAY\",\"deliveryDate\":\"$TOMORROW\",\"customer\":{\"id\":${IDS[CUST_ID]}},\"orderLines\":[{\"description\":\"Item 25%\",\"count\":1,\"unitPriceExcludingVatCurrency\":100,\"vatType\":{\"id\":3}},{\"description\":\"Item 15%\",\"count\":1,\"unitPriceExcludingVatCurrency\":200,\"vatType\":{\"id\":31}},{\"description\":\"Item 12%\",\"count\":1,\"unitPriceExcludingVatCurrency\":300,\"vatType\":{\"id\":32}}]}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    MIXED_ORDER_ID=$(extract_id)
+    record PASS T136a "POST /order (mixed VAT lines)" "id=$MIXED_ORDER_ID"
+
+    # Verify all 3 lines created with correct vatTypes
+    api GET "order/$MIXED_ORDER_ID?fields=orderLines(vatType(*))"
+    LINE_COUNT=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['value']['orderLines']))" 2>/dev/null)
+    VAT_IDS=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+lines=json.load(sys.stdin)['value']['orderLines']
+print(','.join(str(l['vatType']['id']) for l in sorted(lines, key=lambda l: l['vatType']['id'])))
+" 2>/dev/null)
+    if [ "$LINE_COUNT" = "3" ] && [ "$VAT_IDS" = "3,31,32" ]; then
+      record PASS T136b "Mixed VAT lines preserved" "lines=$LINE_COUNT vatTypes=$VAT_IDS"
+    else
+      record FAIL T136b "Mixed VAT lines preserved" "lines=$LINE_COUNT vatTypes=$VAT_IDS"
+    fi
+  else
+    record FAIL T136a "POST /order (mixed VAT lines)" "got $LAST_CODE"
+    validation_msg
+    record SKIP T136b "Mixed VAT lines preserved" "no order"
+  fi
+else
+  record SKIP T136a "POST /order (mixed VAT lines)" "no customer"
+  record SKIP T136b "Mixed VAT lines preserved" "no customer"
+fi
+
 echo ""
 
 # ======================================================================
@@ -1232,6 +1283,406 @@ fi
 echo ""
 
 # ======================================================================
+# PHASE 14b: Required date params, dateTo exclusivity & field expansion
+# ======================================================================
+echo "=== PHASE 14b: Required date params, dateTo exclusivity & field expansion ==="
+
+# ----- Invoice date params -----
+
+# T250: GET /invoice without invoiceDateFrom/To → 422
+if [ -n "${IDS[INV_ID]:-}" ]; then
+  api GET "invoice?customerId=${IDS[CUST_ID]}&count=5"
+  if [ "$LAST_CODE" = "422" ]; then
+    record PASS T250 "GET /invoice without dates → 422" "invoiceDateFrom/dateTo required"
+  else
+    record FAIL T250 "GET /invoice without dates" "expected 422, got $LAST_CODE"
+  fi
+else
+  record SKIP T250 "GET /invoice without dates" "no invoice"
+fi
+
+# T251: GET /invoice dateFrom=dateTo → 422 (dateTo is EXCLUSIVE: "from and including" >= "to and excluding")
+if [ -n "${IDS[INV_ID]:-}" ]; then
+  api GET "invoice?customerId=${IDS[CUST_ID]}&invoiceDateFrom=$TODAY&invoiceDateTo=$TODAY&count=5"
+  if [ "$LAST_CODE" = "422" ]; then
+    record PASS T251 "GET /invoice dateFrom=dateTo → 422 (dateTo exclusive)" "from >= to not allowed"
+  else
+    record FAIL T251 "GET /invoice dateFrom=dateTo" "expected 422, got $LAST_CODE"
+  fi
+else
+  record SKIP T251 "GET /invoice dateFrom=dateTo" "no invoice"
+fi
+
+# T252: GET /invoice dateTo=tomorrow → 200 (correct exclusive usage)
+if [ -n "${IDS[INV_ID]:-}" ]; then
+  api GET "invoice?customerId=${IDS[CUST_ID]}&invoiceDateFrom=$TODAY&invoiceDateTo=$TOMORROW&count=5"
+  if [ "$LAST_CODE" = "200" ]; then
+    inv_found=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('values',[])))" 2>/dev/null)
+    if [ "$inv_found" -gt 0 ] 2>/dev/null; then
+      record PASS T252 "GET /invoice dateTo=tomorrow finds today's" "found $inv_found (dateTo is exclusive)"
+    else
+      record FAIL T252 "GET /invoice dateTo=tomorrow" "0 invoices found"
+    fi
+  else
+    record FAIL T252 "GET /invoice dateTo=tomorrow" "got $LAST_CODE"
+  fi
+else
+  record SKIP T252 "GET /invoice dateTo=tomorrow" "no invoice"
+fi
+
+# ----- Voucher date params -----
+
+# T253: GET /ledger/voucher without dates → 422
+api GET "ledger/voucher?count=5"
+if [ "$LAST_CODE" = "422" ]; then
+  record PASS T253 "GET /ledger/voucher without dates → 422" "dateFrom/dateTo required"
+else
+  record FAIL T253 "GET /ledger/voucher without dates" "expected 422, got $LAST_CODE"
+fi
+
+# T254: GET /ledger/voucher dateFrom=dateTo → 422 (exclusive)
+api GET "ledger/voucher?dateFrom=$TODAY&dateTo=$TODAY&count=5"
+if [ "$LAST_CODE" = "422" ]; then
+  record PASS T254 "GET /ledger/voucher dateFrom=dateTo → 422 (exclusive)" "from >= to not allowed"
+else
+  record FAIL T254 "GET /ledger/voucher dateFrom=dateTo" "expected 422, got $LAST_CODE"
+fi
+
+# T255: GET /ledger/voucher dateTo=tomorrow → 200 (correct)
+api GET "ledger/voucher?dateFrom=$TODAY&dateTo=$TOMORROW&count=5"
+if [ "$LAST_CODE" = "200" ]; then
+  v_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+  record PASS T255 "GET /ledger/voucher dateTo=tomorrow → 200" "count=$v_count (dateTo exclusive)"
+else
+  record FAIL T255 "GET /ledger/voucher dateTo=tomorrow" "got $LAST_CODE"
+fi
+
+# ----- Timesheet date params -----
+# Create a fresh project + activity + timesheet entry (PROJ_ID was deleted in phase 8)
+if [ -n "${IDS[EMP_ID]:-}" ]; then
+  api POST project "{\"name\":\"TS Date Test $TS\",\"projectManager\":{\"id\":${IDS[EMP_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[TS_PROJ_ID]=$(extract_id)
+  fi
+  api POST activity "{\"name\":\"TS Verify $TS\",\"activityType\":\"PROJECT_GENERAL_ACTIVITY\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[TS_ACT_ID]=$(extract_id)
+    # Link activity to project (correct endpoint: project/projectActivity, NOT project/{id}/projectActivity)
+    api POST "project/projectActivity" "{\"project\":{\"id\":${IDS[TS_PROJ_ID]}},\"activity\":{\"id\":${IDS[TS_ACT_ID]}}}"
+    if [[ "$LAST_CODE" =~ ^2 ]]; then
+      IDS[PROJ_ACT_LINK_ID]=$(extract_id)
+    fi
+    # Create timesheet entry
+    api POST "timesheet/entry" "{\"employee\":{\"id\":${IDS[EMP_ID]}},\"project\":{\"id\":${IDS[TS_PROJ_ID]}},\"activity\":{\"id\":${IDS[TS_ACT_ID]}},\"date\":\"$TODAY\",\"hours\":2.5}"
+    if [[ "$LAST_CODE" =~ ^2 ]]; then
+      IDS[TS_ENTRY_ID]=$(extract_id)
+
+      # T256: GET /timesheet/entry without dates → 422
+      api GET "timesheet/entry?employeeId=${IDS[EMP_ID]}&count=5"
+      if [ "$LAST_CODE" = "422" ]; then
+        record PASS T256 "GET /timesheet/entry without dates → 422" "dateFrom/dateTo required"
+      else
+        record FAIL T256 "GET /timesheet/entry without dates" "expected 422, got $LAST_CODE"
+      fi
+
+      # T257: GET /timesheet/entry dateFrom=dateTo → check exclusive
+      api GET "timesheet/entry?employeeId=${IDS[EMP_ID]}&dateFrom=$TODAY&dateTo=$TODAY&count=5"
+      if [ "$LAST_CODE" = "422" ]; then
+        record PASS T257 "GET /timesheet/entry dateFrom=dateTo → 422 (exclusive)" "from >= to not allowed"
+      elif [ "$LAST_CODE" = "200" ]; then
+        ts_same=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('values',[])))" 2>/dev/null)
+        record FAIL T257 "GET /timesheet/entry dateFrom=dateTo" "expected 422 (exclusive), got 200 count=$ts_same (inclusive?)"
+      else
+        record FAIL T257 "GET /timesheet/entry dateFrom=dateTo" "got $LAST_CODE"
+      fi
+
+      # T258: GET /timesheet/entry dateTo=tomorrow → 200
+      api GET "timesheet/entry?employeeId=${IDS[EMP_ID]}&dateFrom=$TODAY&dateTo=$TOMORROW&count=5"
+      if [ "$LAST_CODE" = "200" ]; then
+        ts_found=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('values',[])))" 2>/dev/null)
+        if [ "$ts_found" -gt 0 ] 2>/dev/null; then
+          record PASS T258 "GET /timesheet/entry dateTo=tomorrow → 200" "found $ts_found (dateTo exclusive)"
+        else
+          record FAIL T258 "GET /timesheet/entry dateTo=tomorrow" "0 entries found"
+        fi
+      else
+        record FAIL T258 "GET /timesheet/entry dateTo=tomorrow" "got $LAST_CODE"
+      fi
+    else
+      record SKIP T256 "GET /timesheet/entry without dates" "timesheet create failed: $LAST_CODE"
+      validation_msg
+      record SKIP T257 "GET /timesheet/entry dateFrom=dateTo" "no timesheet entry"
+      record SKIP T258 "GET /timesheet/entry dateTo=tomorrow" "no timesheet entry"
+    fi
+  else
+    record SKIP T256 "GET /timesheet/entry without dates" "activity create failed"
+    record SKIP T257 "GET /timesheet/entry dateFrom=dateTo" "no activity"
+    record SKIP T258 "GET /timesheet/entry dateTo=tomorrow" "no activity"
+  fi
+else
+  record SKIP T256 "GET /timesheet/entry without dates" "no employee"
+  record SKIP T257 "GET /timesheet/entry dateFrom=dateTo" "no employee"
+  record SKIP T258 "GET /timesheet/entry dateTo=tomorrow" "no employee"
+fi
+
+# ----- Ledger posting: same-day allowed (different from invoice/voucher/timesheet) -----
+
+# T259: GET /ledger/posting dateFrom=dateTo → 200 (NOT exclusive like others)
+api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TODAY&count=5"
+if [ "$LAST_CODE" = "200" ]; then
+  p_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+  record PASS T259 "GET /ledger/posting dateFrom=dateTo → 200 (inclusive)" "count=$p_count — unlike invoice/voucher/timesheet"
+else
+  record FAIL T259 "GET /ledger/posting dateFrom=dateTo" "got $LAST_CODE (expected 200 — posting allows same-day)"
+fi
+
+# ----- Project hourly rates -----
+
+# Create a project for hourly rate tests (need admin as PM)
+if [ -n "${IDS[EMP_ID]:-}" ]; then
+  api POST project "{\"name\":\"HourlyRate Test $TS\",\"projectManager\":{\"id\":${IDS[EMP_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[HR_PROJ_ID]=$(extract_id)
+
+    # T264: New project auto-creates a projectHourlyRates entry
+    api GET "project/${IDS[HR_PROJ_ID]}?fields=projectHourlyRates(*)"
+    hr_auto=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin).get('value',{})
+rates=v.get('projectHourlyRates',[])
+if not rates: print('none')
+else:
+  r=rates[0]
+  print(f\"id={r['id']},model={r.get('hourlyRateModel')},fixedRate={r.get('fixedRate')},startDate={r.get('startDate')}\")
+" 2>/dev/null)
+    if echo "$hr_auto" | grep -q "^id="; then
+      record PASS T264 "New project auto-creates hourlyRates entry" "$hr_auto"
+      IDS[HR_RATE_ID]=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['value']['projectHourlyRates'][0]['id'])" 2>/dev/null)
+    else
+      record FAIL T264 "New project auto-creates hourlyRates" "$hr_auto"
+    fi
+
+    # T265: Default hourlyRateModel is TYPE_FIXED_HOURLY_RATE
+    if echo "$hr_auto" | grep -q "TYPE_FIXED_HOURLY_RATE"; then
+      record PASS T265 "Default hourlyRateModel=TYPE_FIXED_HOURLY_RATE" "confirmed"
+    else
+      record FAIL T265 "Default hourlyRateModel" "$hr_auto"
+    fi
+
+    # T266: PUT hourlyRates with fixedRate
+    if [ -n "${IDS[HR_RATE_ID]:-}" ]; then
+      api PUT "project/hourlyRates/${IDS[HR_RATE_ID]}" "{\"id\":${IDS[HR_RATE_ID]},\"version\":0,\"project\":{\"id\":${IDS[HR_PROJ_ID]}},\"hourlyRateModel\":\"TYPE_FIXED_HOURLY_RATE\",\"fixedRate\":1850.0}"
+      if [[ "$LAST_CODE" =~ ^2 ]]; then
+        updated_rate=$(echo "$LAST_BODY" | python3 -c "import sys,json; v=json.load(sys.stdin)['value']; print(f\"fixedRate={v.get('fixedRate')}\")" 2>/dev/null)
+        record PASS T266 "PUT /project/hourlyRates (fixedRate)" "$updated_rate"
+      else
+        record FAIL T266 "PUT /project/hourlyRates (fixedRate)" "got $LAST_CODE"
+        validation_msg
+      fi
+
+      # T267: PUT hourlyRates WITHOUT project ref — still succeeds
+      api GET "project/hourlyRates/${IDS[HR_RATE_ID]}"
+      hr_ver=$(extract_version)
+      api PUT "project/hourlyRates/${IDS[HR_RATE_ID]}" "{\"id\":${IDS[HR_RATE_ID]},\"version\":$hr_ver,\"hourlyRateModel\":\"TYPE_FIXED_HOURLY_RATE\",\"fixedRate\":2000.0}"
+      if [[ "$LAST_CODE" =~ ^2 ]]; then
+        record PASS T267 "PUT /project/hourlyRates (no project ref)" "project ref NOT required on PUT"
+      else
+        record FAIL T267 "PUT /project/hourlyRates (no project ref)" "got $LAST_CODE — project ref may be required"
+        validation_msg
+      fi
+
+      # T268: All 3 hourlyRateModel values accepted
+      models_ok=true
+      for model in TYPE_PREDEFINED_HOURLY_RATES TYPE_PROJECT_SPECIFIC_HOURLY_RATES TYPE_FIXED_HOURLY_RATE; do
+        api GET "project/hourlyRates/${IDS[HR_RATE_ID]}"
+        hr_ver=$(extract_version)
+        payload="{\"id\":${IDS[HR_RATE_ID]},\"version\":$hr_ver,\"project\":{\"id\":${IDS[HR_PROJ_ID]}},\"hourlyRateModel\":\"$model\"}"
+        if [ "$model" = "TYPE_FIXED_HOURLY_RATE" ]; then
+          payload="{\"id\":${IDS[HR_RATE_ID]},\"version\":$hr_ver,\"project\":{\"id\":${IDS[HR_PROJ_ID]}},\"hourlyRateModel\":\"$model\",\"fixedRate\":1500.0}"
+        fi
+        api PUT "project/hourlyRates/${IDS[HR_RATE_ID]}" "$payload"
+        if ! [[ "$LAST_CODE" =~ ^2 ]]; then
+          models_ok=false
+          record FAIL T268 "hourlyRateModel enum ($model)" "got $LAST_CODE"
+          validation_msg
+          break
+        fi
+      done
+      if [ "$models_ok" = "true" ]; then
+        record PASS T268 "All 3 hourlyRateModel values accepted" "PREDEFINED, PROJECT_SPECIFIC, FIXED"
+      fi
+    else
+      record SKIP T266 "PUT /project/hourlyRates" "no rate ID"
+      record SKIP T267 "PUT /project/hourlyRates (no project ref)" "no rate ID"
+      record SKIP T268 "hourlyRateModel enum" "no rate ID"
+    fi
+
+    # T269: POST /project/hourlyRates creates additional rate entry
+    api POST "project/hourlyRates" "{\"project\":{\"id\":${IDS[HR_PROJ_ID]}},\"startDate\":\"$TOMORROW\",\"hourlyRateModel\":\"TYPE_FIXED_HOURLY_RATE\",\"fixedRate\":2500.0}"
+    if [[ "$LAST_CODE" =~ ^2 ]]; then
+      IDS[HR_RATE2_ID]=$(extract_id)
+      record PASS T269 "POST /project/hourlyRates (additional entry)" "id=${IDS[HR_RATE2_ID]}"
+    else
+      record FAIL T269 "POST /project/hourlyRates" "got $LAST_CODE"
+      validation_msg
+    fi
+  else
+    record SKIP T264 "Auto-created hourlyRates" "project create failed"
+    record SKIP T265 "Default hourlyRateModel" "no project"
+    record SKIP T266 "PUT /project/hourlyRates" "no project"
+    record SKIP T267 "PUT /project/hourlyRates (no project ref)" "no project"
+    record SKIP T268 "hourlyRateModel enum" "no project"
+    record SKIP T269 "POST /project/hourlyRates" "no project"
+  fi
+else
+  record SKIP T264 "Auto-created hourlyRates" "no employee"
+  record SKIP T265 "Default hourlyRateModel" "no employee"
+  record SKIP T266 "PUT /project/hourlyRates" "no employee"
+  record SKIP T267 "PUT /project/hourlyRates (no project ref)" "no employee"
+  record SKIP T268 "hourlyRateModel enum" "no employee"
+  record SKIP T269 "POST /project/hourlyRates" "no employee"
+fi
+
+# ----- Project GET returns linked entities inline -----
+
+# T270: GET /project list returns customer.id inline (no separate GET needed)
+if [ -n "${IDS[EMP_ID]:-}" ] && [ -n "${IDS[CUST_ID]:-}" ]; then
+  api POST project "{\"name\":\"CustInline Test $TS\",\"projectManager\":{\"id\":${IDS[EMP_ID]}},\"isInternal\":false,\"startDate\":\"$TODAY\",\"customer\":{\"id\":${IDS[CUST_ID]}}}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    cust_proj_id=$(extract_id)
+    api GET "project?id=$cust_proj_id&count=1"
+    inline_cust_id=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+vs=json.load(sys.stdin).get('values',[])
+if not vs: print('')
+else: print(vs[0].get('customer',{}).get('id',''))
+" 2>/dev/null)
+    if [ "$inline_cust_id" = "${IDS[CUST_ID]}" ]; then
+      record PASS T270 "GET /project list returns customer.id inline" "customer.id=$inline_cust_id"
+    else
+      record FAIL T270 "GET /project list returns customer.id inline" "expected ${IDS[CUST_ID]}, got '$inline_cust_id'"
+    fi
+  else
+    record FAIL T270 "Project with customer creation failed" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T270 "GET /project returns customer.id inline" "no employee or customer"
+fi
+
+# ----- Field expansion gotchas -----
+
+# T260: GET /customer list returns postalAddress as STUB (not expanded)
+if [ -n "${IDS[CUST_ID]:-}" ]; then
+  api GET "customer?id=${IDS[CUST_ID]}&count=1"
+  if [ "$LAST_CODE" = "200" ]; then
+    addr_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+vs=json.load(sys.stdin).get('values',[])
+if not vs: print('no_values')
+else:
+  addr=vs[0].get('postalAddress',{})
+  if not addr: print('null')
+  elif 'addressLine1' in addr: print('expanded')
+  elif 'id' in addr and 'addressLine1' not in addr: print('stub')
+  else: print(f'unknown:{list(addr.keys())}')
+" 2>/dev/null)
+    if [ "$addr_shape" = "stub" ]; then
+      record PASS T260 "GET /customer postalAddress is STUB by default" "only id+url, no addressLine1"
+    elif [ "$addr_shape" = "expanded" ]; then
+      record FAIL T260 "GET /customer postalAddress is STUB" "got expanded without fields param"
+    else
+      record FAIL T260 "GET /customer postalAddress shape" "$addr_shape"
+    fi
+  else
+    record FAIL T260 "GET /customer postalAddress shape" "got $LAST_CODE"
+  fi
+else
+  record SKIP T260 "GET /customer postalAddress shape" "no customer"
+fi
+
+# T261: GET /customer with fields=postalAddress(*) returns EXPANDED address
+if [ -n "${IDS[CUST_ID]:-}" ]; then
+  api GET "customer/${IDS[CUST_ID]}?fields=id,postalAddress(*)"
+  if [ "$LAST_CODE" = "200" ]; then
+    addr_expanded=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin).get('value',{})
+addr=v.get('postalAddress',{})
+if not addr: print('null')
+elif 'addressLine1' in addr: print('expanded')
+else: print(f'stub:{list(addr.keys())}')
+" 2>/dev/null)
+    if [ "$addr_expanded" = "expanded" ]; then
+      record PASS T261 "GET /customer fields=postalAddress(*) → expanded" "addressLine1 present"
+    else
+      record FAIL T261 "GET /customer fields=postalAddress(*)" "$addr_expanded"
+    fi
+  else
+    record FAIL T261 "GET /customer fields expansion" "got $LAST_CODE"
+  fi
+else
+  record SKIP T261 "GET /customer fields=postalAddress(*)" "no customer"
+fi
+
+# T262: GET /employee list returns employments as STUBS
+if [ -n "${IDS[EMP_INLINE_ID]:-}" ]; then
+  api GET "employee?id=${IDS[EMP_INLINE_ID]}&count=1"
+  if [ "$LAST_CODE" = "200" ]; then
+    emp_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+vs=json.load(sys.stdin).get('values',[])
+if not vs: print('no_values')
+else:
+  emps=vs[0].get('employments',[])
+  if not emps: print('empty')
+  elif 'startDate' in emps[0]: print('expanded')
+  elif 'id' in emps[0] and 'startDate' not in emps[0]: print('stub')
+  else: print(f'unknown:{list(emps[0].keys())}')
+" 2>/dev/null)
+    if [ "$emp_shape" = "stub" ]; then
+      record PASS T262 "GET /employee employments are STUBS by default" "only id+url, no startDate"
+    elif [ "$emp_shape" = "expanded" ]; then
+      record FAIL T262 "GET /employee employments are STUBS" "got expanded without fields param"
+    else
+      record FAIL T262 "GET /employee employments shape" "$emp_shape"
+    fi
+  else
+    record FAIL T262 "GET /employee employments shape" "got $LAST_CODE"
+  fi
+else
+  record SKIP T262 "GET /employee employments shape" "no inline employee"
+fi
+
+# T263: GET /employee with fields=employments(*) returns EXPANDED
+if [ -n "${IDS[EMP_INLINE_ID]:-}" ]; then
+  api GET "employee?id=${IDS[EMP_INLINE_ID]}&count=1&fields=id,employments(*)"
+  if [ "$LAST_CODE" = "200" ]; then
+    emp_expanded=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+vs=json.load(sys.stdin).get('values',[])
+if not vs: print('no_values')
+else:
+  emps=vs[0].get('employments',[])
+  if not emps: print('empty')
+  elif 'startDate' in emps[0]: print('expanded')
+  else: print(f'stub:{list(emps[0].keys())}')
+" 2>/dev/null)
+    if [ "$emp_expanded" = "expanded" ]; then
+      record PASS T263 "GET /employee fields=employments(*) → expanded" "startDate present"
+    else
+      record FAIL T263 "GET /employee fields=employments(*)" "$emp_expanded"
+    fi
+  else
+    record FAIL T263 "GET /employee fields expansion" "got $LAST_CODE"
+  fi
+else
+  record SKIP T263 "GET /employee fields=employments(*)" "no inline employee"
+fi
+
+echo ""
+
+# ======================================================================
 # PHASE 15: Cleanup (phases 9-14)
 # ======================================================================
 echo "=== PHASE 15: Cleanup (phases 9-14) ==="
@@ -1267,6 +1718,292 @@ cleanup_delete() {
 [ -n "${IDS[CUST_SHAPE_ID]:-}" ] && cleanup_delete T154 "customer/${IDS[CUST_SHAPE_ID]}" "customer (shape test)"
 
 # Note: employees cannot be deleted (403), so we skip EMP_INLINE_ID and EMP_DEEP_ID
+
+# Delete timesheet entry, project activity, activity, and project from phase 14b
+[ -n "${IDS[TS_ENTRY_ID]:-}" ] && cleanup_delete T155a "timesheet/entry/${IDS[TS_ENTRY_ID]}" "timesheet/entry (verify)"
+[ -n "${IDS[PROJ_ACT_LINK_ID]:-}" ] && cleanup_delete T155b "project/projectActivity/${IDS[PROJ_ACT_LINK_ID]}" "project/projectActivity (verify)"
+[ -n "${IDS[TS_PROJ_ID]:-}" ] && cleanup_delete T155c "project/${IDS[TS_PROJ_ID]}" "project (timesheet verify)"
+[ -n "${IDS[TS_ACT_ID]:-}" ] && cleanup_delete T155d "activity/${IDS[TS_ACT_ID]}" "activity (verify)"
+
+echo ""
+
+# ======================================================================
+# PHASE 16: Knowledge Base Verification (field-guide, entity-deps, id-patterns)
+# ======================================================================
+echo "=== PHASE 16: Knowledge Base Verification ==="
+
+# --- T168: Employment NOT auto-created with employee ---
+# Create a fresh NO_ACCESS employee (with dateOfBirth for T169), then check employments count = 0
+api POST employee "{\"firstName\":\"EmpCheck\",\"lastName\":\"NoAuto $TS\",\"userType\":\"NO_ACCESS\",\"department\":{\"id\":${IDS[DEPT_ID]}},\"dateOfBirth\":\"1990-01-01\"}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[EMP_NOAUTO_ID]=$(extract_id)
+  api GET "employee/employment?employeeId=${IDS[EMP_NOAUTO_ID]}"
+  emp_auto_count=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('fullResultSize',0))" 2>/dev/null)
+  if [ "$emp_auto_count" = "0" ]; then
+    record PASS T168 "Employment NOT auto-created with employee" "count=0 confirmed"
+  else
+    record FAIL T168 "Employment NOT auto-created with employee" "expected 0, got $emp_auto_count"
+  fi
+else
+  record FAIL T168 "Employment NOT auto-created (employee create failed)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# --- T169: Standalone POST /employee/employment ---
+# Use EMP_NOAUTO_ID which has no employment yet
+if [ -n "${IDS[EMP_NOAUTO_ID]:-}" ]; then
+  api POST "employee/employment" "{\"employee\":{\"id\":${IDS[EMP_NOAUTO_ID]}},\"startDate\":\"$TODAY\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[EMPLOYMENT_STANDALONE_ID]=$(extract_id)
+    record PASS T169 "POST /employee/employment (standalone)" "id=${IDS[EMPLOYMENT_STANDALONE_ID]}"
+  else
+    record FAIL T169 "POST /employee/employment (standalone)" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T169 "POST /employee/employment (standalone)" "no employee"
+fi
+
+# --- T177: departmentNumber defaults to empty string (NOT auto-assigned) ---
+api POST department "{\"name\":\"AutoNum Dept $TS\"}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[DEPT_AUTONUM_ID]=$(extract_id)
+  dept_num=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(repr(json.load(sys.stdin)['value'].get('departmentNumber','')))" 2>/dev/null)
+  record PASS T177 "departmentNumber on POST (defaults to empty)" "departmentNumber=$dept_num"
+else
+  record FAIL T177 "departmentNumber (create failed)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# --- T181: deliveryDate omitted in inline order → 422 ---
+api POST invoice "{
+  \"invoiceDate\":\"$TODAY\",
+  \"invoiceDueDate\":\"$DUE_DATE\",
+  \"customer\":{\"id\":${IDS[CUST_ID]}},
+  \"orders\":[{
+    \"orderDate\":\"$TODAY\",
+    \"customer\":{\"id\":${IDS[CUST_ID]}},
+    \"orderLines\":[{\"product\":{\"id\":${IDS[PROD_ID]}},\"count\":1}]
+  }]
+}"
+expect_fail T181 "POST /invoice (order without deliveryDate)"
+check_error_message T181b "Error msg: deliveryDate null" "Kan ikke være null"
+
+# --- T192: Cost without date → still succeeds ---
+if [ -n "${IDS[TE_ID]:-}" ]; then
+  api POST "travelExpense/cost" "{\"travelExpense\":{\"id\":${IDS[TE_ID]}},\"costCategory\":{\"id\":${IDS[COST_CAT_ID]}},\"paymentType\":{\"id\":${IDS[TRAVEL_PAY_ID]}},\"currency\":{\"id\":${IDS[CURRENCY_ID]}},\"amountCurrencyIncVat\":100.0}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    record PASS T192 "POST /travelExpense/cost (no date)" "$LAST_CODE - date is optional"
+  else
+    record FAIL T192 "POST /travelExpense/cost (no date)" "got $LAST_CODE - date may be required"
+    validation_msg
+  fi
+else
+  record SKIP T192 "POST /travelExpense/cost (no date)" "no travel expense"
+fi
+
+# --- T210: Raw int reference fails (not wrapped in {id: X}) ---
+api POST order "{\"orderDate\":\"$TODAY\",\"deliveryDate\":\"$TODAY\",\"customer\":${IDS[CUST_ID]}}"
+expect_fail T210 "POST /order (raw int customer ref, not wrapped)"
+
+# --- T216: Error response has status, code, validationMessages ---
+# Use T210's response (should be an error)
+api POST employee '{"firstName":"ErrShape","lastName":"Test"}'
+err_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+has_all = 'status' in d and 'code' in d and 'validationMessages' in d
+print('yes' if has_all else 'no')
+" 2>/dev/null)
+if [ "$err_shape" = "yes" ]; then
+  record PASS T216 "Error response has status/code/validationMessages" "confirmed"
+else
+  record FAIL T216 "Error response shape" "missing expected fields"
+fi
+
+# --- T218: employeeNumber defaults to empty (NOT auto-assigned) ---
+if [ -n "${IDS[EMP_NOAUTO_ID]:-}" ]; then
+  api GET "employee/${IDS[EMP_NOAUTO_ID]}"
+  emp_num=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(repr(json.load(sys.stdin)['value'].get('employeeNumber','')))" 2>/dev/null)
+  record PASS T218 "employeeNumber on POST (defaults to empty)" "employeeNumber=$emp_num"
+else
+  record SKIP T218 "employeeNumber on POST" "no employee"
+fi
+
+# --- T219: customerNumber auto-assigned ---
+if [ -n "${IDS[CUST_ID]:-}" ]; then
+  api GET "customer/${IDS[CUST_ID]}"
+  cust_num=$(echo "$LAST_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['value'].get('customerNumber',''))" 2>/dev/null)
+  if [ -n "$cust_num" ] && [ "$cust_num" != "None" ] && [ "$cust_num" != "null" ]; then
+    record PASS T219 "customerNumber auto-assigned" "customerNumber=$cust_num"
+  else
+    record FAIL T219 "customerNumber auto-assigned" "customerNumber is null/empty"
+  fi
+else
+  record SKIP T219 "customerNumber auto-assigned" "no customer"
+fi
+
+# --- T220: Travel expense number auto-assigned ---
+if [ -n "${IDS[TE_ID]:-}" ]; then
+  api GET "travelExpense/${IDS[TE_ID]}"
+  te_num=$(echo "$LAST_BODY" | python3 -c "import sys,json; v=json.load(sys.stdin)['value']; print(v.get('number', v.get('numberAsString','')))" 2>/dev/null)
+  if [ -n "$te_num" ] && [ "$te_num" != "None" ] && [ "$te_num" != "null" ] && [ "$te_num" != "" ]; then
+    record PASS T220 "Travel expense number auto-assigned" "number=$te_num"
+  else
+    record FAIL T220 "Travel expense number auto-assigned" "number is null/empty"
+  fi
+else
+  record SKIP T220 "Travel expense number auto-assigned" "no travel expense"
+fi
+
+# --- T221: Version starts at 1 on newly created entity ---
+api POST customer "{\"name\":\"VerCheck $TS\"}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[CUST_VER_ID]=$(extract_id)
+  ver_val=$(extract_version)
+  if [ "$ver_val" = "1" ]; then
+    record PASS T221 "Version starts at 1" "version=$ver_val"
+  else
+    record FAIL T221 "Version starts at 1" "version=$ver_val (expected 1)"
+  fi
+else
+  record FAIL T221 "Version starts at 1 (create failed)" "got $LAST_CODE"
+  validation_msg
+fi
+
+# --- T222: PUT with wrong version fails ---
+if [ -n "${IDS[CUST_VER_ID]:-}" ]; then
+  api PUT "customer/${IDS[CUST_VER_ID]}" "{\"id\":${IDS[CUST_VER_ID]},\"version\":999,\"name\":\"WrongVer $TS\"}"
+  if [ "$LAST_CODE" = "409" ] || [ "$LAST_CODE" = "422" ]; then
+    record PASS T222 "PUT with wrong version fails" "$LAST_CODE"
+  elif [[ "$LAST_CODE" =~ ^2 ]]; then
+    record FAIL T222 "PUT with wrong version should fail" "got $LAST_CODE (success unexpected)"
+  else
+    record PASS T222 "PUT with wrong version fails" "$LAST_CODE"
+  fi
+else
+  record SKIP T222 "PUT with wrong version" "no customer"
+fi
+
+# --- T230: List GET returns full objects with version and nested fields ---
+# Unresolved issue: do list GETs return complete objects (version, postalAddress)?
+if [ -n "${IDS[CUST_ID]:-}" ]; then
+  api GET "customer?id=${IDS[CUST_ID]}"
+  list_check=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+vs=d.get('values',[])
+if not vs:
+  print('no_values')
+else:
+  v=vs[0]
+  has_version = 'version' in v
+  has_addr = 'postalAddress' in v and isinstance(v.get('postalAddress'), dict)
+  addr_has_id = v.get('postalAddress',{}).get('id') is not None if has_addr else False
+  print(f'version={has_version},addr={has_addr},addr_id={addr_has_id}')
+" 2>/dev/null)
+  if echo "$list_check" | grep -q "version=True.*addr=True.*addr_id=True"; then
+    record PASS T230 "List GET returns full objects (version+postalAddress)" "$list_check"
+  elif echo "$list_check" | grep -q "version=True"; then
+    record PASS T230 "List GET returns version but check addr" "$list_check"
+  else
+    record FAIL T230 "List GET completeness" "$list_check"
+  fi
+else
+  record SKIP T230 "List GET completeness" "no customer"
+fi
+
+# --- T240: NO_ACCESS employee as projectManager → fails (entitlement issue) ---
+# Unresolved: NO_ACCESS employees lack AUTH_PROJECT_MANAGER entitlement
+if [ -n "${IDS[EMP_NOAUTO_ID]:-}" ]; then
+  api POST project "{\"name\":\"PM Entitlement Test $TS\",\"projectManager\":{\"id\":${IDS[EMP_NOAUTO_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+  if [ "$LAST_CODE" = "422" ]; then
+    pm_err=$(echo "$LAST_BODY" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+msgs=d.get('validationMessages',[])
+print('|'.join(m.get('message','') for m in msgs) + '|' + d.get('message',''))
+" 2>/dev/null)
+    if echo "$pm_err" | grep -qi "prosjektleder"; then
+      record XFAIL T240 "NO_ACCESS employee as PM (lacks entitlement)" "422 - entitlement required"
+    else
+      record XFAIL T240 "NO_ACCESS employee as PM (other 422)" "$pm_err"
+    fi
+  elif [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[PROJ_PM_TEST_ID]=$(extract_id)
+    record PASS T240 "NO_ACCESS employee as PM (unexpectedly works)" "$LAST_CODE"
+  else
+    record FAIL T240 "NO_ACCESS employee as PM" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T240 "NO_ACCESS employee as PM" "no employee"
+fi
+
+# --- T241: Admin employee as projectManager → succeeds ---
+# The admin (EMP_ID from setup) should have AUTH_PROJECT_MANAGER
+api POST project "{\"name\":\"Admin PM Test $TS\",\"projectManager\":{\"id\":${IDS[EMP_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+if [[ "$LAST_CODE" =~ ^2 ]]; then
+  IDS[PROJ_ADMIN_PM_ID]=$(extract_id)
+  record PASS T241 "Admin employee as PM (has entitlement)" "$LAST_CODE"
+else
+  record FAIL T241 "Admin employee as PM" "got $LAST_CODE"
+  validation_msg
+fi
+
+# --- T242: STANDARD employee as projectManager → check entitlement ---
+if [ -n "${IDS[EMP3_ID]:-}" ]; then
+  api POST project "{\"name\":\"Std PM Test $TS\",\"projectManager\":{\"id\":${IDS[EMP3_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    IDS[PROJ_STD_PM_ID]=$(extract_id)
+    record PASS T242 "STANDARD employee as PM" "$LAST_CODE - has entitlement"
+  elif [ "$LAST_CODE" = "422" ]; then
+    record XFAIL T242 "STANDARD employee as PM (lacks entitlement)" "422 - same as NO_ACCESS"
+  else
+    record FAIL T242 "STANDARD employee as PM" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T242 "STANDARD employee as PM" "no STANDARD employee"
+fi
+
+# --- T243: Grant entitlement via API ---
+# Try PUT /employee/entitlement/:grantEntitlementsByTemplate
+if [ -n "${IDS[EMP_NOAUTO_ID]:-}" ]; then
+  api PUT "employee/entitlement/:grantEntitlementsByTemplate?employeeId=${IDS[EMP_NOAUTO_ID]}&template=AUTH_PROJECT_MANAGER" ""
+  if [[ "$LAST_CODE" =~ ^2 ]]; then
+    record PASS T243 "Grant entitlement via API" "$LAST_CODE"
+    # Now retry project creation
+    api POST project "{\"name\":\"PM After Grant $TS\",\"projectManager\":{\"id\":${IDS[EMP_NOAUTO_ID]}},\"isInternal\":true,\"startDate\":\"$TODAY\"}"
+    if [[ "$LAST_CODE" =~ ^2 ]]; then
+      IDS[PROJ_GRANTED_PM_ID]=$(extract_id)
+      record PASS T243b "Project with granted PM" "$LAST_CODE"
+    else
+      record FAIL T243b "Project with granted PM" "got $LAST_CODE"
+      validation_msg
+    fi
+  elif [ "$LAST_CODE" = "404" ]; then
+    record XFAIL T243 "Grant entitlement endpoint (404 on sandbox)" "endpoint not available"
+  else
+    record FAIL T243 "Grant entitlement via API" "got $LAST_CODE"
+    validation_msg
+  fi
+else
+  record SKIP T243 "Grant entitlement via API" "no employee"
+fi
+
+echo ""
+
+# ======================================================================
+# PHASE 16 CLEANUP
+# ======================================================================
+echo "=== PHASE 16 Cleanup ==="
+
+[ -n "${IDS[DEPT_AUTONUM_ID]:-}" ] && cleanup_delete T16C1 "department/${IDS[DEPT_AUTONUM_ID]}" "department (autonum)"
+[ -n "${IDS[CUST_VER_ID]:-}" ] && cleanup_delete T16C2 "customer/${IDS[CUST_VER_ID]}" "customer (version check)"
+[ -n "${IDS[PROJ_PM_TEST_ID]:-}" ] && cleanup_delete T16C3 "project/${IDS[PROJ_PM_TEST_ID]}" "project (PM test)"
+[ -n "${IDS[PROJ_ADMIN_PM_ID]:-}" ] && cleanup_delete T16C4 "project/${IDS[PROJ_ADMIN_PM_ID]}" "project (admin PM)"
+[ -n "${IDS[PROJ_STD_PM_ID]:-}" ] && cleanup_delete T16C5 "project/${IDS[PROJ_STD_PM_ID]}" "project (std PM)"
+[ -n "${IDS[PROJ_GRANTED_PM_ID]:-}" ] && cleanup_delete T16C6 "project/${IDS[PROJ_GRANTED_PM_ID]}" "project (granted PM)"
+# Note: employees cannot be deleted (403)
 
 echo ""
 

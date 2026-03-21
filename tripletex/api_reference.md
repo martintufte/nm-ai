@@ -156,7 +156,7 @@ Employment is NOT auto-created; use `"employments":[{"startDate":"YYYY-MM-DD"}]`
   - `firstName`: string
   - `lastName`: string
   - `employeeNumber`: string
-  - `dateOfBirth`: string — **required on PUT** (not on POST)
+  - `dateOfBirth`: string
   - `email`: string — **required for STANDARD/EXTENDED userType** (not NO_ACCESS)
   - `phoneNumberMobileCountry`: Country
   - `phoneNumberMobile`: string
@@ -474,8 +474,6 @@ Get employee by ID.
 
 ### `PUT /employee/{id}`
 Update employee.
-
-**Note:** `dateOfBirth` is required on PUT (not required on POST).
 
 Body: `Employee` (see above)
 

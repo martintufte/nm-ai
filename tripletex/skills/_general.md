@@ -21,7 +21,11 @@ NOT raw integers. Applies to all foreign key fields: `customer`, `employee`, `de
 ```
 Pagination: `?from=X&count=Y`. The `fields` query parameter filters response fields, but avoid it unless you are certain of the exact DTO field names — wrong names cause HTTP 400, wasting a call.
 
-**List GETs return full objects** — each item in `values[]` has `id`, `version`, and all nested objects (e.g., `postalAddress` with its own `id`). No need to re-GET by ID after finding an entity in a list response.
+**Nested field expansion:** To expand sub-objects in a single call, use nested `fields` syntax: `?fields=postings(*,account(*))`. This returns both the posting fields and the expanded account object. Without this, nested references are returned as stubs (just `id` and `url`).
+
+**Date range filters (`dateFrom`/`dateTo`):** Many list endpoints require `dateFrom` and `dateTo`. **`dateTo` is exclusive** — using the same date for both returns a 422 error. To query a single day, set `dateTo` to the next day.
+
+**List GETs return full objects** — each item in `values[]` has `id`, `version`, and all nested objects (e.g., `postalAddress` with its own `id`). However, array-typed sub-resources (e.g. `postings` on vouchers, `orderLines` on orders) are returned as stubs in list responses — use `fields` expansion or `GET /{id}` to fetch full details.
 
 ### Single entity (`GET /entity/{id}`)
 ```json
@@ -33,7 +37,6 @@ Returns the full created object with `id`, `version`, and all fields. HTTP 201.
 ```json
 {"value": {"id": 12345, "version": 1, "url": "...", ...all fields...}}
 ```
-**Call-saving:** Always reuse `id` and `version` from POST responses — no need to GET after creating.
 
 **Exception:** Some travel sub-resources (mileage allowance, per diem) return only `{"value": {"url": ".../{id}"}}`. Parse the id from the URL if needed.
 
@@ -66,8 +69,6 @@ Every entity has a `version` integer. For PUT updates:
 1. Include `"id": X, "version": V` in body
 2. If version mismatch → PUT fails
 
-**Call-saving:** If you just created the entity, reuse `id` and `version` from the POST response — skip the GET.
-
 ## Nested Object Updates (PUT)
 <!-- Corrected: address without id/version is NOT silently ignored — it creates a new address object replacing the old one. Verified 2026-03-20. -->
 For nested Address objects on customer/employee PUTs: including address data **without** `id`/`version` creates a **new address object** (old one is replaced). This is the simplest pattern — no need to track address IDs.
@@ -78,13 +79,16 @@ Do NOT try to reference an old address `id` on a different PUT — Tripletex rej
 Any writable array-of-object field supports inline creation on POST. Create parent + children in a single call.
 
 Verified inline fields:
-- `Invoice.orders` → `[Order]` (and `Order.orderLines` → `[OrderLine]`) — 3 entities in 1 call
+- `Invoice.orders` → `[Order]` (and `Order.orderLines` → `[OrderLine]`)
 - `Employee.employments` → `[Employment]` (and `Employment.employmentDetails` → `[EmploymentDetails]`)
 - `TravelExpense.costs` → `[Cost]`
+- `TravelExpense.mileageAllowances` → `[MileageAllowance]`
 - `TravelExpense.perDiemCompensations` → `[PerDiemCompensation]`
+- `TravelExpense.accommodationAllowances` → `[AccommodationAllowance]`
 - `Project.participants` → `[ProjectParticipant]`
+- `Project.projectActivities` → `[ProjectActivity]`
 
-**Always prefer inline creation over separate calls when possible.**
+See `_optimality_*` skills for domain-specific inline patterns.
 
 ### PUT action endpoints (`:payment`, `:createCreditNote`)
 Returns the entity object. HTTP 200. Credit note returns a **new invoice object** (the credit note itself) with its own ID.

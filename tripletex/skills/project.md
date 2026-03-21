@@ -84,6 +84,8 @@ Query params: `id`, `projectId`, `type`, `startDateFrom`, `startDateTo`, `showIn
 ### POST /project/hourlyRates
 ProjectHourlyRate writable fields: `project`, `startDate`, `showInProjectOrder`, `hourlyRateModel`, `projectSpecificRates` (inline array), `fixedRate`
 
+`hourlyRateModel` enum values: `TYPE_PREDEFINED_HOURLY_RATES`, `TYPE_PROJECT_SPECIFIC_HOURLY_RATES`, `TYPE_FIXED_HOURLY_RATE`. Default for new projects is `TYPE_FIXED_HOURLY_RATE`. PUT does not require `project` ref.
+
 ### POST /project/hourlyRates/list
 ### PUT /project/hourlyRates/list
 ### DELETE /project/hourlyRates/{id}

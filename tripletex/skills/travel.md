@@ -25,14 +25,15 @@ Optional travelDetails fields: `isForeignTravel`, `departureFrom`, `destination`
 
 Other optional fields: `project`, `department`, `isChargeable`, `travelAdvance`.
 
-## Call-saving Patterns
+## Inline Capabilities
 
-- **POST returns full object** with `id`, `version`. Use for all sub-resource calls.
-- **Inline costs on POST**: include `"costs": [{...}]` in the travel expense POST to create costs in the same call.
-- **Inline per diem on POST**: include `"perDiemCompensations": [{...}]` in the travel expense POST.
-- **Combine inlines**: costs and per diem can both be inlined on the same POST, saving 2+ calls.
-- **Rate category lookup**: current 2026 categories are at offset ~400+. Use `GET /travelExpense/rateCategory?from=400&count=60` — don't paginate from the start.
-- **Reuse employee ID** from prior creation — don't look it up.
+All four sub-resource types can be inlined on `POST /travelExpense`:
+- `"costs": [{...}]`
+- `"mileageAllowances": [{...}]` (passenger supplement = separate entry with rateType 744)
+- `"perDiemCompensations": [{...}]`
+- `"accommodationAllowances": [{...}]`
+
+All four can be combined in a single POST. See `_optimality_travel` for patterns.
 
 ## Minimum Payload
 ```json
@@ -67,7 +68,7 @@ POST /travelExpense
 }
 ```
 
-With inline costs and per diem (saves 2 calls):
+With ALL sub-resources inlined (saves 4+ calls):
 ```json
 POST /travelExpense
 {
@@ -76,7 +77,9 @@ POST /travelExpense
   "travelDetails": {
     "departureDate": "YYYY-MM-DD",
     "returnDate": "YYYY-MM-DD",
-    "isDayTrip": false
+    "isDayTrip": false,
+    "departureFrom": "Oslo",
+    "destination": "Bergen"
   },
   "costs": [{
     "costCategory": {"id": CAT_ID},
@@ -85,12 +88,28 @@ POST /travelExpense
     "amountCurrencyIncVat": 750.0,
     "date": "YYYY-MM-DD"
   }],
+  "mileageAllowances": [{
+    "rateType": {"id": 743},
+    "date": "YYYY-MM-DD",
+    "departureLocation": "Oslo",
+    "destination": "Bergen",
+    "km": 463,
+    "rate": 3.5,
+    "amount": 1620.5,
+    "isCompanyCar": false
+  }],
   "perDiemCompensations": [{
     "rateType": {"id": PERDIEM_RATE_CAT_ID},
     "count": 2,
     "location": "Bergen",
     "overnightAccommodation": "HOTEL",
     "isDeductionForBreakfast": false
+  }],
+  "accommodationAllowances": [{
+    "rateType": {"id": 754},
+    "count": 2,
+    "location": "Bergen",
+    "address": "Testveien 1"
   }]
 }
 ```

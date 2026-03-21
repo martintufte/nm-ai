@@ -13,7 +13,7 @@ Optional fields: `number`, `description`, `orderLineDescription`, `ean`, `costEx
 
 ## Gotchas
 
-- **vatType: Do NOT set it.** Both input (id=1) and output (id=3) VAT codes are INVALID for products. Error: "Ugyldig mva-kode." Omit entirely — VAT is applied at invoicing level, not product level.
+- **vatType** requires the company to be VAT-registered. When registered, common outgoing codes: id=3 (25%), id=31 (15%), id=32 (12%); ingoing: id=1 (25%); zero-rate: id=6 (0%). "Ugyldig mva-kode" means the company isn't VAT-registered (only id=0 and id=6 work without registration).
 - **`priceIncludingVatCurrency` does NOT auto-calculate excl price.** Setting it stores both incl and excl as the same value. Always set `priceExcludingVatCurrency` explicitly.
 
 ## Call-saving Patterns

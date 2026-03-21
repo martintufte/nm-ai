@@ -13,10 +13,13 @@ import json
 import logging
 import os
 import random
+import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import Any
 from typing import Literal
 from typing import cast
 
@@ -38,7 +41,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 
-LOG_DIR = Path(os.environ.get("LOG_DIR", "/tmp/tripletex-logs"))
+LOG_DIR = Path(os.environ.get("LOG_DIR", str(Path(tempfile.gettempdir()) / "tripletex-logs")))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _log_format = "%(asctime)s %(levelname)s %(name)s — %(message)s"
@@ -111,9 +114,7 @@ _task_prompt = (_HERE / "prompt.md").read_text()
 _scoring = (_SKILLS_DIR / "scoring.md").read_text()
 
 # Build a compact index of available skill files (excluding scoring, which stays in prompt)
-_AVAILABLE_SKILLS = {
-    p.stem: p for p in sorted(_SKILLS_DIR.glob("*.md")) if p.name != "scoring.md"
-}
+_AVAILABLE_SKILLS = {p.stem: p for p in sorted(_SKILLS_DIR.glob("*.md")) if p.name != "scoring.md"}
 
 _SKILL_INDEX = """\
 ## Available Skill References
@@ -125,9 +126,15 @@ This tool is free and does not count toward your efficiency score.
 | Skill | Covers |
 |-------|--------|
 | _general | API patterns: references, responses, versioning, inline creation, error translations, lookups |
+| _optimality_agent | Generic call-minimization techniques + index of domain-specific optimality skills |
+| _optimality_employee | Employee inline patterns (employment + details in 1 call) |
+| _optimality_invoice | Invoice inline patterns (orders + lines in 1 call), payment/credit gotchas |
+| _optimality_travel | Travel inline patterns (all 4 sub-resources in 1 call), passenger supplement |
+| _optimality_project | Project inline patterns (participants + activities in 1 call) |
+| _optimality_ledger | Ledger account lookup optimization, payroll vouchers |
 | customer | Customer CRUD, address nested updates |
 | department | Department CRUD (no dependencies) |
-| employee | Employee + Employment, userType, department req, dateOfBirth on PUT |
+| employee | Employee + Employment, userType, department req |
 | invoice | Invoice + Orders + OrderLines, payment/credit note (query params), bank account prereq |
 | ledger | Ledger accounts, postings, vouchers, VAT codes, currency |
 | product | Product CRUD, VAT gotcha, unique names |
@@ -136,9 +143,7 @@ This tool is free and does not count toward your efficiency score.
 | timesheet | Timesheet entry (hours registration), allocated hours, month/week approval |
 | travel | Travel expenses, costs, mileage, per diem, accommodation, rate categories |"""
 
-_FULL_SYSTEM_PROMPT = "\n\n".join(
-    [_SKILL_INDEX, _task_prompt, _scoring]
-)
+_FULL_SYSTEM_PROMPT = f"{_SKILL_INDEX}\n\n{_task_prompt}\n\n{_scoring}"
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_ITERATIONS = 20
@@ -181,7 +186,7 @@ class CallTracker:
                 is_error=400 <= status_code < 500,
                 params=params,
                 data_summary=data_summary,
-            )
+            ),
         )
 
     @property
@@ -267,30 +272,35 @@ _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0  # seconds
 
 
-def _retry_request(fn, *args, **kwargs):
+def _retry_request(
+    fn: Callable[..., httpx.Response],
+    *args: Any,
+    **kwargs: Any,
+) -> httpx.Response:
     """Execute an HTTP request with retry on transient connection/timeout failures.
 
     Retries on connection errors and timeouts only (NOT HTTP status errors).
     Uses exponential backoff with jitter.
     """
-    last_exc = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             resp = fn(*args, **kwargs)
             resp.raise_for_status()
-            return resp
         except (httpx.ConnectError, httpx.TimeoutException) as e:
-            last_exc = e
             if attempt < _MAX_RETRIES:
-                delay = _RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+                delay = _RETRY_BASE_DELAY * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
                 logger.warning(
                     "Connection error on attempt %d (%s), retrying in %.1fs",
-                    attempt + 1, type(e).__name__, delay,
+                    attempt + 1,
+                    type(e).__name__,
+                    delay,
                 )
                 time.sleep(delay)
             else:
                 raise
-    raise last_exc  # unreachable, but satisfies type checkers
+        else:
+            return resp
+    raise AssertionError("unreachable")
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +333,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
             for wrong, correct in fixes.items():
                 if wrong in params:
                     raise ToolError(
-                        f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead."
+                        f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead.",
                     )
 
         logger.info("GET %s params=%s", path, params)
@@ -424,11 +434,26 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         if skill_name not in _AVAILABLE_SKILLS:
             available = ", ".join(sorted(_AVAILABLE_SKILLS))
             raise ToolError(
-                f"Unknown skill '{skill_name}'. Available skills: {available}"
+                f"Unknown skill '{skill_name}'. Available skills: {available}",
             )
         return _AVAILABLE_SKILLS[skill_name].read_text()
 
-    return [read_skill, tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
+    @beta_tool
+    def review_plan(plan: str) -> str:
+        r"""Review your planned API calls for optimality before executing.
+
+        This tool is free — it does not count toward your efficiency score.
+        Call this AFTER drafting your plan but BEFORE making any API calls.
+
+        Args:
+            plan: Your intended API calls as a numbered list, e.g.
+                  "1. GET /customer?customerName=Acme\n2. GET /product?name=Widget\n3. POST /invoice {...}"
+        """
+        from tripletex.review_plan import review_plan as _review  # noqa: PLC0415
+
+        return _review(plan)
+
+    return [read_skill, review_plan, tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
 
 
 # ---------------------------------------------------------------------------
