@@ -7,13 +7,14 @@ import sys
 
 def stream_claude(prompt: str) -> str:
     """Run claude with streaming JSON output and print text chunks as they arrive."""
-    proc = subprocess.Popen(  # noqa: S603
+    proc = subprocess.Popen(
         ["claude", "-p", "--output-format", "stream-json", "--verbose", prompt],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
 
     collected = []
+    assert proc.stdout is not None  # guaranteed by stdout=subprocess.PIPE
     for raw_line in proc.stdout:
         line = raw_line.decode().strip()
         if not line:
@@ -37,7 +38,7 @@ def stream_claude(prompt: str) -> str:
     proc.wait()
     print()
 
-    if proc.returncode != 0:
+    if proc.returncode != 0 and proc.stderr:
         stderr = proc.stderr.read().decode()
         print(f"claude exited with code {proc.returncode}: {stderr}", file=sys.stderr)
 

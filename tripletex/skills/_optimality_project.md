@@ -33,15 +33,19 @@ Timesheet entries require the activity to be linked to the project via `projectA
 
 ## GET /project returns linked entities inline
 
-`GET /project` returns `customer.id`, `projectManager.id`, `department.id`, `projectActivities`, and `projectHourlyRates` inline. Don't make separate GETs for these — extract IDs directly from the project response.
+`GET /project` returns `customer.id`, `projectManager.id`, `department.id`, `projectActivities`, and `projectHourlyRates` inline as stubs (id + url). These IDs are sufficient for POST/PUT operations — don't make separate GETs.
 
-Bad (2 calls):
+For full expansion (activity refs, rate models, etc.), use `fields=projectActivities(*),projectHourlyRates(*)`.
+
+Bad (3 calls):
 ```
-GET /project?name=X          → customer.id = C
-GET /customer?customerName=X → same id C you already had
+GET /project?name=X
+GET /project/projectActivity/{id}    ← unnecessary, id already in project response
+GET /project/hourlyRates/{id}        ← unnecessary, id already in project response
 ```
 
 Good (1 call):
 ```
-GET /project?name=X          → customer.id = C, use directly
+GET /project?name=X&fields=projectActivities(*),projectHourlyRates(*)
+→ customer.id, projectActivities[].id, projectHourlyRates[].id — all inline
 ```

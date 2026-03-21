@@ -20,18 +20,19 @@ import argparse
 import json
 import os
 import random
+import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 
 _HERE = Path(__file__).resolve().parent.parent
 _SKILLS_DIR = _HERE / "skills"
 
-_AVAILABLE_SKILLS = {
-    p.stem: p for p in sorted(_SKILLS_DIR.glob("*.md")) if p.name != "scoring.md"
-}
+_AVAILABLE_SKILLS = {p.stem: p for p in sorted(_SKILLS_DIR.glob("*.md")) if p.name != "scoring.md"}
 
 MAX_RESPONSE_CHARS = 20_000
 _MAX_RETRIES = 3
@@ -65,11 +66,18 @@ def _get_client() -> httpx.Client:
     )
 
 
-def _log_call(method: str, endpoint: str, status_code: int, *, params: dict | None = None, data: dict | None = None) -> None:
+def _log_call(
+    method: str,
+    endpoint: str,
+    status_code: int,
+    *,
+    params: dict | None = None,
+    data: dict | None = None,
+) -> None:
     log_file = os.environ.get("CALL_LOG_FILE")
     if not log_file:
         return
-    entry = {
+    entry: dict[str, str | int | bool | dict] = {
         "method": method,
         "endpoint": endpoint,
         "status_code": status_code,
@@ -81,26 +89,34 @@ def _log_call(method: str, endpoint: str, status_code: int, *, params: dict | No
         entry["data_summary"] = json.dumps(data, ensure_ascii=False)[:200]
 
     # Append-only JSONL — one JSON object per line, safe under concurrent writes
-    with open(log_file, "a") as f:
+    with Path(log_file).open("a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def _retry_request(fn, *args, **kwargs):
-    last_exc = None
+def _retry_request(
+    fn: Callable[..., httpx.Response],
+    *args: Any,
+    **kwargs: Any,
+) -> httpx.Response:
+    last_exc: httpx.ConnectError | httpx.TimeoutException | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             resp = fn(*args, **kwargs)
             resp.raise_for_status()
-            return resp
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             last_exc = e
             if attempt < _MAX_RETRIES:
-                delay = _RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
-                print(f"Connection error ({type(e).__name__}), retrying in {delay:.1f}s...", file=sys.stderr)
+                delay = _RETRY_BASE_DELAY * (2**attempt) + random.uniform(0, 0.5)  # noqa: S311
+                print(
+                    f"Connection error ({type(e).__name__}), retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
                 time.sleep(delay)
             else:
                 raise
-    raise last_exc
+        else:
+            return resp
+    raise last_exc  # type: ignore[misc]
 
 
 def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
@@ -109,13 +125,19 @@ def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
         fixes = _PARAM_FIXES.get(path, {})
         for wrong, correct in fixes.items():
             if wrong in params:
-                print(json.dumps({"error": f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead."}))
+                print(
+                    json.dumps(
+                        {"error": f"Wrong param '{wrong}' for /{path}. Use '{correct}' instead."},
+                    ),
+                )
                 return
     try:
         resp = _retry_request(client.get, path, params=params)
     except httpx.HTTPStatusError as e:
         _log_call("GET", path, e.response.status_code, params=params)
-        print(json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}))
+        print(
+            json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}),
+        )
         return
     _log_call("GET", path, resp.status_code, params=params)
     print(_truncate(json.dumps(resp.json())))
@@ -127,7 +149,9 @@ def cmd_post(client: httpx.Client, endpoint: str, data: dict) -> None:
         resp = _retry_request(client.post, path, json=data)
     except httpx.HTTPStatusError as e:
         _log_call("POST", path, e.response.status_code, data=data)
-        print(json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}))
+        print(
+            json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}),
+        )
         return
     _log_call("POST", path, resp.status_code, data=data)
     print(_truncate(json.dumps(resp.json())))
@@ -139,7 +163,9 @@ def cmd_put(client: httpx.Client, endpoint: str, data: dict) -> None:
         resp = _retry_request(client.put, path, json=data)
     except httpx.HTTPStatusError as e:
         _log_call("PUT", path, e.response.status_code, data=data)
-        print(json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}))
+        print(
+            json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}),
+        )
         return
     _log_call("PUT", path, resp.status_code, data=data)
     print(_truncate(json.dumps(resp.json())))
@@ -151,7 +177,9 @@ def cmd_delete(client: httpx.Client, endpoint: str) -> None:
         resp = _retry_request(client.delete, path)
     except httpx.HTTPStatusError as e:
         _log_call("DELETE", path, e.response.status_code)
-        print(json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}))
+        print(
+            json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}),
+        )
         return
     _log_call("DELETE", path, resp.status_code)
     print(json.dumps({"status": "deleted"}))
@@ -168,8 +196,6 @@ def cmd_read_skill(skill_name: str) -> None:
 
 def cmd_review_plan(plan: str) -> None:
     """Review plan using claude CLI (no API key needed)."""
-    import subprocess
-
     optimality_skills = "\n\n".join(
         p.read_text() for p in sorted(_SKILLS_DIR.glob("_optimality*.md"))
     )
@@ -196,16 +222,21 @@ Do NOT suggest speculative alternatives you aren't sure work."""
 
     result = subprocess.run(
         [
-            "claude", "-p", plan,
-            "--system-prompt", system_prompt,
+            "claude",
+            "-p",
+            plan,
+            "--system-prompt",
+            system_prompt,
             "--no-session-persistence",
-            "--model", "sonnet",
+            "--model",
+            "sonnet",
             "--dangerously-skip-permissions",
         ],
         env=env,
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
     _log_call("REVIEW_PLAN", "", 200)

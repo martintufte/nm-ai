@@ -19,6 +19,6 @@ How to write entries for `tripletex-knowledge/unresolved-issues.md`.
 **Observed:** <What actually happened — include endpoints, status codes, call sequences>
 **Expected:** <What should have happened>
 **Raw evidence:** <Relevant log lines, API responses, or call sequences>
-**Review-plan called:** <yes / no — did the agent call review-plan before executing?>
-**Review-plan caught it:** <yes / no / n/a — if called, did the review flag the specific inefficiency?>
+**Review-plan called:** <yes / no — did the agent call review-plan before executing? Only include for optimality issues, not correctness issues.>
+**Review-plan caught it:** <yes / no / n/a — if called, did the review flag the specific inefficiency? Only include for optimality issues.>
 ```

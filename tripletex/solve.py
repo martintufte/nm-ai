@@ -147,7 +147,9 @@ _FULL_SYSTEM_PROMPT = f"{_SKILL_INDEX}\n\n{_task_prompt}\n\n{_scoring}"
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_ITERATIONS = 20
+MAX_TASK_SECONDS = 300
 MAX_RESPONSE_CHARS = 20_000  # Truncate large API responses
+INPUT_TPM_LIMIT = 30_000  # Anthropic input tokens-per-minute rate limit
 
 
 @dataclass
@@ -163,6 +165,8 @@ class CallRecord:
 @dataclass
 class CallTracker:
     calls: list[CallRecord] = field(default_factory=list)
+    _consecutive_errors: int = field(default=0, repr=False)
+    _consecutive_proxy_errors: int = field(default=0, repr=False)
 
     def record(
         self,
@@ -172,22 +176,43 @@ class CallTracker:
         *,
         params: dict | None = None,
         data: dict | None = None,
+        response_text: str = "",
     ) -> None:
         # Keep a short summary of POST/PUT body for the log
         data_summary = None
         if data:
             data_summary = json.dumps(data, ensure_ascii=False)[:200]
 
+        is_error = 400 <= status_code < 600
         self.calls.append(
             CallRecord(
                 method=method,
                 endpoint=endpoint,
                 status_code=status_code,
-                is_error=400 <= status_code < 500,
+                is_error=is_error,
                 params=params,
                 data_summary=data_summary,
             ),
         )
+
+        if is_error:
+            self._consecutive_errors += 1
+            is_proxy = status_code == 403 and "expired proxy token" in response_text.lower()
+            if is_proxy:
+                self._consecutive_proxy_errors += 1
+            if self._consecutive_proxy_errors >= _CONSECUTIVE_PROXY_ERROR_LIMIT:
+                raise ConsecutiveApiError(
+                    f"{self._consecutive_proxy_errors} consecutive proxy token errors — token is invalid/expired",
+                )
+            if self._consecutive_errors >= _CONSECUTIVE_ERROR_LIMIT:
+                recent = self.calls[-self._consecutive_errors :]
+                summary = "; ".join(f"{c.method} {c.endpoint} → {c.status_code}" for c in recent)
+                raise ConsecutiveApiError(
+                    f"{self._consecutive_errors} consecutive API errors: {summary}",
+                )
+        else:
+            self._consecutive_errors = 0
+            self._consecutive_proxy_errors = 0
 
     @property
     def api_calls(self) -> int:
@@ -217,10 +242,18 @@ class TripletexCredentials(BaseModel):
     session_token: str
 
 
+class FileAttachment(BaseModel):
+    """Structured file attachment from the competition platform."""
+
+    filename: str
+    content_base64: str
+    mime_type: str | None = None
+
+
 class SolveRequest(BaseModel):
     prompt: str
     tripletex_credentials: TripletexCredentials
-    files: list[str] | None = None  # Optional base64-encoded PDFs/images
+    files: list[str | FileAttachment] | None = None  # base64 strings or structured objects
 
 
 class SolveResponse(BaseModel):
@@ -266,6 +299,14 @@ def _normalize_endpoint(endpoint: str) -> str:
     endpoint = endpoint.lstrip("/")
     endpoint = endpoint.removeprefix("v2/")
     return endpoint
+
+
+_CONSECUTIVE_ERROR_LIMIT = 4
+_CONSECUTIVE_PROXY_ERROR_LIMIT = 2
+
+
+class ConsecutiveApiError(Exception):
+    """Raised when consecutive API errors exceed the limit for the task."""
 
 
 _MAX_RETRIES = 3
@@ -314,6 +355,13 @@ _PARAM_FIXES: dict[str, dict[str, str]] = {
     "customer": {"name": "customerName"},
 }
 
+# PUT action endpoints where parameters MUST be in the query string, not the body.
+# If the agent puts these fields in the JSON body the API returns 422.
+_QUERY_ONLY_ACTIONS: dict[str, set[str]] = {
+    ":createCreditNote": {"date", "comment", "creditNoteEmail", "sendToCustomer", "sendType"},
+    ":payment": {"paymentDate", "paymentTypeId", "paidAmount", "paidAmountCurrency"},
+}
+
 
 def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionTool]:
     """Create Tripletex API tools bound to the given httpx client and call tracker."""
@@ -340,7 +388,13 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         try:
             resp = _retry_request(client.get, path, params=params)
         except httpx.HTTPStatusError as e:
-            tracker.record("GET", path, e.response.status_code, params=params)
+            tracker.record(
+                "GET",
+                path,
+                e.response.status_code,
+                params=params,
+                response_text=e.response.text,
+            )
             logger.warning(
                 "GET %s → HTTP %s: %s",
                 path,
@@ -364,7 +418,13 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         try:
             resp = _retry_request(client.post, path, json=data)
         except httpx.HTTPStatusError as e:
-            tracker.record("POST", path, e.response.status_code, data=data)
+            tracker.record(
+                "POST",
+                path,
+                e.response.status_code,
+                data=data,
+                response_text=e.response.text,
+            )
             logger.warning(
                 "POST %s → HTTP %s: %s",
                 path,
@@ -384,11 +444,31 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
             data: JSON body to send.
         """
         path = _normalize_endpoint(endpoint)
+
+        # Guard: certain PUT actions require query params, not body fields.
+        if data:
+            for action, fields in _QUERY_ONLY_ACTIONS.items():
+                if action in path:
+                    bad = fields & data.keys()
+                    if bad:
+                        raise ToolError(
+                            f"/{action.lstrip(':')} requires query params, not body. "
+                            f"Move {bad} into the URL: {path}?{'&'.join(f'{k}=...' for k in sorted(bad))} "
+                            f"and send data={{}}.",
+                        )
+                    break
+
         logger.info("PUT %s data=%s", path, json.dumps(data)[:500])
         try:
             resp = _retry_request(client.put, path, json=data)
         except httpx.HTTPStatusError as e:
-            tracker.record("PUT", path, e.response.status_code, data=data)
+            tracker.record(
+                "PUT",
+                path,
+                e.response.status_code,
+                data=data,
+                response_text=e.response.text,
+            )
             logger.warning(
                 "PUT %s → HTTP %s: %s",
                 path,
@@ -411,7 +491,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         try:
             resp = _retry_request(client.delete, path)
         except httpx.HTTPStatusError as e:
-            tracker.record("DELETE", path, e.response.status_code)
+            tracker.record("DELETE", path, e.response.status_code, response_text=e.response.text)
             logger.warning(
                 "DELETE %s → HTTP %s: %s",
                 path,
@@ -461,7 +541,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
 # ---------------------------------------------------------------------------
 def build_user_message(
     task_prompt: str,
-    files: list[str] | None,
+    files: list[str | FileAttachment] | None,
 ) -> list[anthropic.types.beta.BetaContentBlockParam]:
     """Build the initial user message with text and optional file attachments."""
     content: list[anthropic.types.beta.BetaContentBlockParam] = [
@@ -469,23 +549,35 @@ def build_user_message(
     ]
 
     if files:
-        for file_b64 in files:
-            media_type = _detect_media_type(file_b64)
+        for file_entry in files:
+            # Extract base64 data, mime hint, and filename from structured or plain format
+            if isinstance(file_entry, FileAttachment):
+                file_b64 = file_entry.content_base64
+                mime_hint = file_entry.mime_type
+                filename = file_entry.filename
+            else:
+                file_b64 = file_entry
+                mime_hint = None
+                filename = None
+
+            media_type = _detect_media_type(file_b64, mime_type_hint=mime_hint)
+
             # Strip data URI prefix if present
             if "," in file_b64 and file_b64.index(",") < 100:
-                file_b64 = file_b64.split(",", 1)[1]  # noqa: PLW2901
+                file_b64 = file_b64.split(",", 1)[1]
 
             if media_type == "application/pdf":
-                content.append(
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": file_b64,
-                        },
+                doc_block: dict[str, Any] = {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": file_b64,
                     },
-                )
+                }
+                if filename:
+                    doc_block["title"] = filename
+                content.append(cast(anthropic.types.beta.BetaContentBlockParam, doc_block))
             else:
                 image_media_type = cast(
                     Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
@@ -505,8 +597,14 @@ def build_user_message(
     return content
 
 
-def _detect_media_type(b64_string: str) -> str:
-    """Detect media type from a base64 string, possibly with data URI prefix."""
+def _detect_media_type(b64_string: str, *, mime_type_hint: str | None = None) -> str:
+    """Detect media type from a base64 string, possibly with data URI prefix.
+
+    If mime_type_hint is provided (e.g. from a FileAttachment), use it directly.
+    """
+    if mime_type_hint:
+        return mime_type_hint
+
     if b64_string.startswith("data:"):
         header = b64_string.split(",", 1)[0]
         media_type = header.split(":")[1].split(";")[0]
@@ -532,7 +630,7 @@ def _detect_media_type(b64_string: str) -> str:
 def parse_and_execute_task(
     task_prompt: str,
     client: httpx.Client,
-    files: list[str] | None,
+    files: list[str | FileAttachment] | None,
 ) -> CallTracker:
     """Run the Claude agentic loop to solve a Tripletex task.
 
@@ -543,7 +641,7 @@ def parse_and_execute_task(
     Returns the CallTracker with recorded API calls.
     """
     tracker = CallTracker()
-    anthropic_client = Anthropic()
+    anthropic_client = Anthropic(max_retries=5)
     tools = make_tools(client, tracker)
     user_content = build_user_message(task_prompt, files)
 
@@ -565,17 +663,38 @@ def parse_and_execute_task(
     )
 
     iteration = 0
-    for iteration, message in enumerate(runner, 1):
-        tool_names = [
-            b.name for b in message.content if isinstance(b, anthropic.types.beta.BetaToolUseBlock)
-        ]
-        logger.info(
-            "Iteration %d — stop_reason=%s tools=%s usage=%s",
-            iteration,
-            message.stop_reason,
-            tool_names or None,
-            message.usage,
-        )
+    try:
+        for iteration, message in enumerate(runner, 1):
+            tool_names = [
+                b.name
+                for b in message.content
+                if isinstance(b, anthropic.types.beta.BetaToolUseBlock)
+            ]
+            logger.info(
+                "Iteration %d — stop_reason=%s tools=%s usage=%s",
+                iteration,
+                message.stop_reason,
+                tool_names or None,
+                message.usage,
+            )
+            # Throttle: sleep proportional to token usage to stay under rate limit
+            input_tokens = message.usage.input_tokens
+            if input_tokens > 0:
+                min_interval = (input_tokens / INPUT_TPM_LIMIT) * 60
+                sleep_time = min(min_interval, 15.0)  # cap at 15s to preserve task budget
+                if sleep_time > 0.5:
+                    logger.info("Throttling %.1fs for %d input tokens", sleep_time, input_tokens)
+                time.sleep(sleep_time)
+            elapsed_so_far = time.monotonic() - t0
+            if elapsed_so_far >= MAX_TASK_SECONDS:
+                logger.error(
+                    "Aborting: task exceeded %ds (%.1fs elapsed)",
+                    MAX_TASK_SECONDS,
+                    elapsed_so_far,
+                )
+                break
+    except ConsecutiveApiError:
+        logger.exception("Aborting due to consecutive API errors")
 
     elapsed = time.monotonic() - t0
     call_lines = "\n  ".join(tracker.summary_parts())
@@ -596,20 +715,31 @@ def parse_and_execute_task(
 async def solve(request: SolveRequest) -> SolveResponse:
     """Main endpoint called by the competition platform."""
     file_count = len(request.files) if request.files else 0
-    file_sizes = [len(f) for f in request.files] if request.files else []
     creds = request.tripletex_credentials
+
+    # Log file info, handling both plain strings and FileAttachment objects
+    file_summaries: list[str] = []
+    if request.files:
+        for i, f in enumerate(request.files):
+            if isinstance(f, FileAttachment):
+                b64_data = f.content_base64
+                media = _detect_media_type(b64_data, mime_type_hint=f.mime_type)
+                file_summaries.append(
+                    f"File {i}: {f.filename} {media}, {len(b64_data)} chars base64",
+                )
+            else:
+                media = _detect_media_type(f)
+                file_summaries.append(f"File {i}: {media}, {len(f)} chars base64")
+
     logger.info(
-        "POST /solve — base_url=%s files=%d file_sizes=%s prompt_length=%d",
+        "POST /solve — base_url=%s files=%d prompt_length=%d",
         creds.base_url,
         file_count,
-        file_sizes,
         len(request.prompt),
     )
     logger.info("Task prompt:\n%s", request.prompt)
-    if request.files:
-        for i, f in enumerate(request.files):
-            media = _detect_media_type(f)
-            logger.info("  File %d: %s, %d chars base64", i, media, len(f))
+    for summary in file_summaries:
+        logger.info("  %s", summary)
 
     client = get_tripletex_client(creds.base_url, creds.session_token)
 

@@ -16,6 +16,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
 import os
 import subprocess
@@ -25,6 +27,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +58,56 @@ SyntheticTask = dict[str, Any]
 VerifyCheck = tuple[str, bool, str]  # (check_name, passed, detail)
 
 
+def _make_pdf(text_lines: list[str]) -> bytes:
+    """Create a minimal valid PDF containing the given text lines."""
+    buf = io.BytesIO()
+    offsets: dict[int, int] = {}
+
+    def w(s: str) -> None:
+        buf.write(s.encode("latin-1"))
+
+    w("%PDF-1.4\n")
+
+    offsets[1] = buf.tell()
+    w("1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n")
+
+    offsets[2] = buf.tell()
+    w("2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n")
+
+    # Content stream (text lines rendered top-down)
+    content_parts = []
+    y = 750
+    for line in text_lines:
+        escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content_parts.append(f"BT /F1 11 Tf 50 {y} Td ({escaped}) Tj ET")
+        y -= 16
+    content = "\n".join(content_parts)
+
+    offsets[4] = buf.tell()
+    w(f"4 0 obj<</Length {len(content)}>>stream\n{content}\nendstream endobj\n")
+
+    offsets[3] = buf.tell()
+    w(
+        "3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R"
+        "/Resources<</Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>"
+        "/Contents 4 0 R>>endobj\n",
+    )
+
+    xref_pos = buf.tell()
+    n = max(offsets) + 1
+    w("xref\n")
+    w(f"0 {n}\n")
+    w("0000000000 65535 f \n")
+    for i in range(1, n):
+        w(f"{offsets[i]:010d} 00000 n \n")
+    w(f"trailer<</Size {n}/Root 1 0 R>>\n")
+    w("startxref\n")
+    w(f"{xref_pos}\n")
+    w("%%EOF\n")
+
+    return buf.getvalue()
+
+
 def _verify_checks(checks: list[VerifyCheck]) -> dict:
     """Summarize verify checks into a result dict."""
     passed = sum(1 for _, ok, _ in checks if ok)
@@ -83,19 +136,33 @@ def build_tasks() -> list[SyntheticTask]:
         print(f"  [setup] Created department '{dept_name_1}' (id={resp.json()['value']['id']})")
 
     def verify_task_1(client: httpx.Client) -> list[VerifyCheck]:
-        resp = client.get("employee", params={"firstName": emp_first, "lastName": emp_last, "count": 5, "fields": "id,email,employments(*)"})
+        resp = client.get(
+            "employee",
+            params={
+                "firstName": emp_first,
+                "lastName": emp_last,
+                "count": 5,
+                "fields": "id,email,employments(*)",
+            },
+        )
         vals = resp.json().get("values", [])
         if not vals:
-            return [("employee_exists", False, f"No employee found with name {emp_first} {emp_last}")]
+            return [
+                ("employee_exists", False, f"No employee found with name {emp_first} {emp_last}"),
+            ]
         emp = vals[0]
         checks: list[VerifyCheck] = [
             ("employee_exists", True, f"id={emp['id']}"),
-            ("email", emp.get("email") == emp_email, f"expected {emp_email}, got {emp.get('email')}"),
+            (
+                "email",
+                emp.get("email") == emp_email,
+                f"expected {emp_email}, got {emp.get('email')}",
+            ),
         ]
         # Check employment start date
         emps = emp.get("employments", [])
         has_start = any(e.get("startDate") == "2026-04-01" for e in emps)
-        checks.append(("employment_start_date", has_start, f"expected 2026-04-01 in employments"))
+        checks.append(("employment_start_date", has_start, "expected 2026-04-01 in employments"))
         return checks
 
     # --- Task 2.1: Create Invoice (needs pre-created customer + product) ---
@@ -116,15 +183,30 @@ def build_tasks() -> list[SyntheticTask]:
         if not custs:
             return [("customer_exists", False, f"No customer '{cust_name_2}'")]
         cust_id = custs[0]["id"]
-        resp = client.get("invoice", params={"customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 5,
+            },
+        )
         invoices = resp.json().get("values", [])
         if not invoices:
-            return [("customer_exists", True, ""), ("invoice_exists", False, "No invoice found for customer")]
+            return [
+                ("customer_exists", True, ""),
+                ("invoice_exists", False, "No invoice found for customer"),
+            ]
         inv = invoices[0]
         checks: list[VerifyCheck] = [
             ("customer_exists", True, f"id={cust_id}"),
             ("invoice_exists", True, f"id={inv['id']}"),
-            ("invoice_date", inv.get("invoiceDate") == "2026-03-25", f"expected 2026-03-25, got {inv.get('invoiceDate')}"),
+            (
+                "invoice_date",
+                inv.get("invoiceDate") == "2026-03-25",
+                f"expected 2026-03-25, got {inv.get('invoiceDate')}",
+            ),
         ]
         # Check order lines via the order
         orders = inv.get("orders", [])
@@ -133,8 +215,14 @@ def build_tasks() -> list[SyntheticTask]:
             resp = client.get(f"order/{order_id}", params={"fields": "orderLines(*)"})
             order = resp.json().get("value", {})
             lines = order.get("orderLines", [])
-            has_3_units = any(l.get("count") == 3 for l in lines)
-            checks.append(("order_line_count_3", has_3_units, f"lines: {[(l.get('count'), l.get('unitPriceExcludingVatCurrency')) for l in lines]}"))
+            has_3_units = any(line.get("count") == 3 for line in lines)
+            checks.append(
+                (
+                    "order_line_count_3",
+                    has_3_units,
+                    f"lines: {[(line.get('count'), line.get('unitPriceExcludingVatCurrency')) for line in lines]}",
+                ),
+            )
         return checks
 
     # --- Task 3.1: Update Customer Address (needs pre-created customer) ---
@@ -146,7 +234,10 @@ def build_tasks() -> list[SyntheticTask]:
         print(f"  [setup] Created customer '{cust_name_3}' (id={resp.json()['value']['id']})")
 
     def verify_task_3(client: httpx.Client) -> list[VerifyCheck]:
-        resp = client.get("customer", params={"customerName": cust_name_3, "count": 5, "fields": "id,postalAddress(*)"})
+        resp = client.get(
+            "customer",
+            params={"customerName": cust_name_3, "count": 5, "fields": "id,postalAddress(*)"},
+        )
         custs = resp.json().get("values", [])
         if not custs:
             return [("customer_exists", False, f"No customer '{cust_name_3}'")]
@@ -154,8 +245,16 @@ def build_tasks() -> list[SyntheticTask]:
         addr = cust.get("postalAddress", {}) or {}
         checks: list[VerifyCheck] = [
             ("customer_exists", True, f"id={cust['id']}"),
-            ("address_line", addr.get("addressLine1") == "Storgata 45", f"expected 'Storgata 45', got {addr.get('addressLine1')!r}"),
-            ("postal_code", addr.get("postalCode") == "0182", f"expected '0182', got {addr.get('postalCode')!r}"),
+            (
+                "address_line",
+                addr.get("addressLine1") == "Storgata 45",
+                f"expected 'Storgata 45', got {addr.get('addressLine1')!r}",
+            ),
+            (
+                "postal_code",
+                addr.get("postalCode") == "0182",
+                f"expected '0182', got {addr.get('postalCode')!r}",
+            ),
             ("city", addr.get("city") == "Oslo", f"expected 'Oslo', got {addr.get('city')!r}"),
         ]
         return checks
@@ -171,7 +270,13 @@ def build_tasks() -> list[SyntheticTask]:
     def verify_task_4(client: httpx.Client) -> list[VerifyCheck]:
         resp = client.get("department", params={"name": dept_name_4, "count": 5})
         vals = resp.json().get("values", [])
-        return [("department_deleted", len(vals) == 0, f"found {len(vals)} departments named '{dept_name_4}'")]
+        return [
+            (
+                "department_deleted",
+                len(vals) == 0,
+                f"found {len(vals)} departments named '{dept_name_4}'",
+            ),
+        ]
 
     # --- Task 5.1: Full Invoice with Payment ---
     cust_name_5 = f"Nordic Solutions {uid} AS"
@@ -183,7 +288,15 @@ def build_tasks() -> list[SyntheticTask]:
         if not custs:
             return [("customer_exists", False, f"No customer '{cust_name_5}'")]
         cust_id = custs[0]["id"]
-        resp = client.get("invoice", params={"customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 5,
+            },
+        )
         invoices = resp.json().get("values", [])
         if not invoices:
             return [("customer_exists", True, ""), ("invoice_exists", False, "No invoice found")]
@@ -193,8 +306,16 @@ def build_tasks() -> list[SyntheticTask]:
         checks: list[VerifyCheck] = [
             ("customer_exists", True, f"id={cust_id}"),
             ("invoice_exists", True, f"id={inv['id']}"),
-            ("amount_excl_vat", amount == expected_amount, f"expected {expected_amount}, got {amount}"),
-            ("is_paid", inv.get("amountOutstanding") == 0, f"outstanding={inv.get('amountOutstanding')}"),
+            (
+                "amount_excl_vat",
+                amount == expected_amount,
+                f"expected {expected_amount}, got {amount}",
+            ),
+            (
+                "is_paid",
+                inv.get("amountOutstanding") == 0,
+                f"outstanding={inv.get('amountOutstanding')}",
+            ),
         ]
         return checks
 
@@ -247,14 +368,24 @@ def build_tasks() -> list[SyntheticTask]:
         proj_cust = proj.get("customer", {}) or {}
         resp2 = client.get("customer", params={"customerName": cust_name_6, "count": 5})
         expected_cust_id = resp2.json()["values"][0]["id"] if resp2.json().get("values") else None
-        checks.append(("customer_linked", proj_cust.get("id") == expected_cust_id,
-                        f"expected cust_id={expected_cust_id}, got {proj_cust.get('id')}"))
+        checks.append(
+            (
+                "customer_linked",
+                proj_cust.get("id") == expected_cust_id,
+                f"expected cust_id={expected_cust_id}, got {proj_cust.get('id')}",
+            ),
+        )
         # Check participant
         resp3 = client.get(f"project/{proj['id']}", params={"fields": "participants(employee(*))"})
         participants = resp3.json().get("value", {}).get("participants", [])
         participant_emails = [p.get("employee", {}).get("email") for p in participants]
-        checks.append(("participant_added", emp_email_6 in participant_emails,
-                        f"expected {emp_email_6} in {participant_emails}"))
+        checks.append(
+            (
+                "participant_added",
+                emp_email_6 in participant_emails,
+                f"expected {emp_email_6} in {participant_emails}",
+            ),
+        )
         return checks
 
     # --- Task 7.1: Run Payroll via Manual Voucher (needs pre-created employee) ---
@@ -286,13 +417,17 @@ def build_tasks() -> list[SyntheticTask]:
 
     def verify_task_7(client: httpx.Client) -> list[VerifyCheck]:
         total_salary = 34950 + 15450  # base + bonus = 50400
-        from datetime import timedelta
         today = datetime.now(tz=UTC).date()
         tomorrow = today + timedelta(days=1)
         # Find recent vouchers — dateFrom/dateTo required, dateTo is exclusive
-        resp = client.get("ledger/voucher", params={
-            "dateFrom": today.isoformat(), "dateTo": tomorrow.isoformat(), "count": 200,
-        })
+        resp = client.get(
+            "ledger/voucher",
+            params={
+                "dateFrom": today.isoformat(),
+                "dateTo": tomorrow.isoformat(),
+                "count": 200,
+            },
+        )
         vouchers = resp.json().get("values", [])
         # Find a voucher that has postings on a salary account (5000-series)
         target_voucher = None
@@ -301,7 +436,10 @@ def build_tasks() -> list[SyntheticTask]:
             postings = v.get("postings", [])
             # Postings in listing are stubs — fetch with expanded fields
             if postings and not postings[0].get("account", {}).get("number"):
-                resp2 = client.get(f"ledger/voucher/{v['id']}", params={"fields": "postings(*,account(*))"})
+                resp2 = client.get(
+                    f"ledger/voucher/{v['id']}",
+                    params={"fields": "postings(*,account(*))"},
+                )
                 postings = resp2.json().get("value", {}).get("postings", [])
             for p in postings:
                 acct_num = p.get("account", {}).get("number", 0)
@@ -311,15 +449,37 @@ def build_tasks() -> list[SyntheticTask]:
                     break
             if target_voucher:
                 break
-        if not target_voucher:
-            return [("voucher_exists", False, f"No voucher with 5000-series account found among {len(vouchers)} vouchers on {today}")]
-        debit_total = sum(p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) > 0)
-        credit_total = sum(p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) < 0)
+        if not target_voucher or target_postings is None:
+            return [
+                (
+                    "voucher_exists",
+                    False,
+                    f"No voucher with 5000-series account found among {len(vouchers)} vouchers on {today}",
+                ),
+            ]
+        debit_total = sum(
+            p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) > 0
+        )
+        credit_total = sum(
+            p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) < 0
+        )
         checks: list[VerifyCheck] = [
             ("voucher_exists", True, f"id={target_voucher['id']}"),
-            ("debit_amount", debit_total == total_salary, f"expected {total_salary}, got {debit_total}"),
-            ("credit_amount", credit_total == -total_salary, f"expected {-total_salary}, got {credit_total}"),
-            ("balanced", debit_total + credit_total == 0, f"debit={debit_total} credit={credit_total}"),
+            (
+                "debit_amount",
+                debit_total == total_salary,
+                f"expected {total_salary}, got {debit_total}",
+            ),
+            (
+                "credit_amount",
+                credit_total == -total_salary,
+                f"expected {-total_salary}, got {credit_total}",
+            ),
+            (
+                "balanced",
+                debit_total + credit_total == 0,
+                f"debit={debit_total} credit={credit_total}",
+            ),
         ]
         return checks
 
@@ -414,21 +574,42 @@ def build_tasks() -> list[SyntheticTask]:
     def verify_task_8(client: httpx.Client) -> list[VerifyCheck]:
         checks: list[VerifyCheck] = []
         # Check timesheet entry
-        resp = client.get("employee", params={"firstName": emp_first_8, "lastName": emp_last_8, "count": 5})
+        resp = client.get(
+            "employee",
+            params={"firstName": emp_first_8, "lastName": emp_last_8, "count": 5},
+        )
         emps = resp.json().get("values", [])
         if not emps:
             return [("employee_found", False, f"No employee '{emp_first_8} {emp_last_8}'")]
         emp_id = emps[0]["id"]
-        resp = client.get("timesheet/entry", params={"employeeId": emp_id, "dateFrom": "2020-01-01", "dateTo": "2030-01-01", "count": 50})
+        resp = client.get(
+            "timesheet/entry",
+            params={
+                "employeeId": emp_id,
+                "dateFrom": "2020-01-01",
+                "dateTo": "2030-01-01",
+                "count": 50,
+            },
+        )
         entries = resp.json().get("values", [])
         has_11h = any(e.get("hours") == 11 for e in entries)
-        checks.append(("timesheet_11h", has_11h, f"entries hours: {[e.get('hours') for e in entries]}"))
+        checks.append(
+            ("timesheet_11h", has_11h, f"entries hours: {[e.get('hours') for e in entries]}"),
+        )
         # Check invoice for customer
         resp = client.get("customer", params={"customerName": cust_name_8, "count": 5})
         custs = resp.json().get("values", [])
         if custs:
             cust_id = custs[0]["id"]
-            resp = client.get("invoice", params={"customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+            resp = client.get(
+                "invoice",
+                params={
+                    "customerId": cust_id,
+                    "invoiceDateFrom": "2020-01-01",
+                    "invoiceDateTo": "2030-01-01",
+                    "count": 5,
+                },
+            )
             invoices = resp.json().get("values", [])
             checks.append(("invoice_exists", len(invoices) > 0, f"found {len(invoices)} invoices"))
         else:
@@ -496,7 +677,15 @@ def build_tasks() -> list[SyntheticTask]:
         if not custs:
             return [("customer_exists", False, f"No customer with org {org_nr_9}")]
         cust_id = custs[0]["id"]
-        resp = client.get("invoice", params={"customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 5,
+            },
+        )
         invoices = resp.json().get("values", [])
         if not invoices:
             return [("customer_exists", True, ""), ("invoice_exists", False, "No invoice found")]
@@ -504,7 +693,11 @@ def build_tasks() -> list[SyntheticTask]:
         checks: list[VerifyCheck] = [
             ("customer_exists", True, f"id={cust_id}"),
             ("invoice_exists", True, f"id={inv['id']}"),
-            ("invoice_date", inv.get("invoiceDate") == "2026-04-01", f"got {inv.get('invoiceDate')}"),
+            (
+                "invoice_date",
+                inv.get("invoiceDate") == "2026-04-01",
+                f"got {inv.get('invoiceDate')}",
+            ),
         ]
         # Check 3 order lines
         orders = inv.get("orders", [])
@@ -577,20 +770,42 @@ def build_tasks() -> list[SyntheticTask]:
         proj = projs[0]
         checks: list[VerifyCheck] = [
             ("project_exists", True, f"id={proj['id']}"),
-            ("is_fixed_price", proj.get("isFixedPrice") is True, f"isFixedPrice={proj.get('isFixedPrice')}"),
-            ("fixed_price_amount", proj.get("fixedprice") == 473250, f"expected 473250, got {proj.get('fixedprice')}"),
+            (
+                "is_fixed_price",
+                proj.get("isFixedPrice") is True,
+                f"isFixedPrice={proj.get('isFixedPrice')}",
+            ),
+            (
+                "fixed_price_amount",
+                proj.get("fixedprice") == 473250,
+                f"expected 473250, got {proj.get('fixedprice')}",
+            ),
         ]
         # Check milestone invoice (25% of 473250 = 118312.50)
         cust = proj.get("customer", {}) or {}
         if cust.get("id"):
-            resp2 = client.get("invoice", params={"customerId": cust["id"], "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+            resp2 = client.get(
+                "invoice",
+                params={
+                    "customerId": cust["id"],
+                    "invoiceDateFrom": "2020-01-01",
+                    "invoiceDateTo": "2030-01-01",
+                    "count": 5,
+                },
+            )
             invoices = resp2.json().get("values", [])
             checks.append(("invoice_exists", len(invoices) > 0, f"found {len(invoices)} invoices"))
             if invoices:
                 # Check amount is ~25% of 473250
                 expected = 473250 * 0.25
                 amount = invoices[0].get("amount", 0)
-                checks.append(("milestone_amount", abs(amount - expected) < 1, f"expected ~{expected}, got {amount}"))
+                checks.append(
+                    (
+                        "milestone_amount",
+                        abs(amount - expected) < 1,
+                        f"expected ~{expected}, got {amount}",
+                    ),
+                )
         return checks
 
     # --- Task 11.1: Order → Invoice Conversion + Payment (German) ---
@@ -651,13 +866,29 @@ def build_tasks() -> list[SyntheticTask]:
         cust_id = custs[0]["id"]
 
         # Check the order was converted (isClosed after :invoice)
-        resp = client.get("order", params={"customerId": cust_id, "orderDateFrom": "2020-01-01", "orderDateTo": "2030-01-01", "count": 5})
+        resp = client.get(
+            "order",
+            params={
+                "customerId": cust_id,
+                "orderDateFrom": "2020-01-01",
+                "orderDateTo": "2030-01-01",
+                "count": 5,
+            },
+        )
         orders = resp.json().get("values", [])
         order_closed = False
         if orders:
             order_closed = orders[0].get("isClosed", False)
 
-        resp = client.get("invoice", params={"customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-01-01", "count": 5})
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 5,
+            },
+        )
         invoices = resp.json().get("values", [])
         if not invoices:
             return [
@@ -671,8 +902,139 @@ def build_tasks() -> list[SyntheticTask]:
             ("customer_exists", True, f"id={cust_id}"),
             ("order_converted", order_closed, f"isClosed={order_closed}"),
             ("invoice_exists", True, f"id={inv['id']}"),
-            ("amount_ex_vat", inv.get("amountExcludingVat") == expected_total, f"expected {expected_total}, got {inv.get('amountExcludingVat')}"),
-            ("is_paid", inv.get("amountOutstanding") == 0, f"outstanding={inv.get('amountOutstanding')}"),
+            (
+                "amount_ex_vat",
+                inv.get("amountExcludingVat") == expected_total,
+                f"expected {expected_total}, got {inv.get('amountExcludingVat')}",
+            ),
+            (
+                "is_paid",
+                inv.get("amountOutstanding") == 0,
+                f"outstanding={inv.get('amountOutstanding')}",
+            ),
+        ]
+        return checks
+
+    # --- Task 12.1: Credit Note for Invoice (French) ---
+    cust_name_12 = f"Bordeaux Consulting {uid} SAS"
+
+    def setup_task_12(client: httpx.Client) -> None:
+        _ensure_bank_account(client)
+        resp = client.post("customer", json={"name": cust_name_12})
+        resp.raise_for_status()
+        cust_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created customer '{cust_name_12}' (id={cust_id})")
+        resp = client.post(
+            "invoice",
+            json={
+                "invoiceDate": "2026-03-15",
+                "invoiceDueDate": "2026-04-15",
+                "customer": {"id": cust_id},
+                "orders": [
+                    {
+                        "orderDate": "2026-03-15",
+                        "deliveryDate": "2026-03-15",
+                        "customer": {"id": cust_id},
+                        "orderLines": [
+                            {
+                                "description": "Service annuel",
+                                "count": 1,
+                                "unitPriceExcludingVatCurrency": 18000,
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        inv_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created invoice (id={inv_id})")
+
+    def verify_task_12(client: httpx.Client) -> list[VerifyCheck]:
+        resp = client.get("customer", params={"customerName": cust_name_12, "count": 5})
+        custs = resp.json().get("values", [])
+        if not custs:
+            return [("customer_exists", False, f"No customer '{cust_name_12}'")]
+        cust_id = custs[0]["id"]
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 10,
+            },
+        )
+        invoices = resp.json().get("values", [])
+        # There should be 2 invoices: the original and the credit note
+        checks: list[VerifyCheck] = [
+            ("customer_exists", True, f"id={cust_id}"),
+            (
+                "has_credit_note",
+                len(invoices) >= 2,
+                f"expected >=2 invoices (original + credit note), got {len(invoices)}",
+            ),
+        ]
+        if len(invoices) >= 2:
+            # Credit note should have negative amount
+            has_negative = any(inv.get("amountExcludingVat", 0) < 0 for inv in invoices)
+            checks.append(
+                (
+                    "credit_note_negative",
+                    has_negative,
+                    "expected a credit note with negative amount",
+                ),
+            )
+        return checks
+
+    # --- Task 13.1: Create Customer from PDF attachment (structured file) ---
+    cust_name_13 = f"Nordlys Digital {uid} AS"
+    org_nr_13 = "6" + uid[:8].translate(str.maketrans("abcdef", "123456"))
+    cust_address_13 = "Havnegata 12"
+    cust_postal_13 = "7010"
+    cust_city_13 = "Trondheim"
+
+    pdf_lines_13 = [
+        "TILBUDSBREV",
+        "",
+        f"Kundenavn: {cust_name_13}",
+        f"Organisasjonsnummer: {org_nr_13}",
+        f"Adresse: {cust_address_13}",
+        f"Postnummer: {cust_postal_13}",
+        f"Poststed: {cust_city_13}",
+        "",
+        "Vi bekrefter herved tilbudet for IT-konsulenttjenester.",
+    ]
+    pdf_bytes_13 = _make_pdf(pdf_lines_13)
+    pdf_b64_13 = base64.b64encode(pdf_bytes_13).decode()
+
+    def verify_task_13(client: httpx.Client) -> list[VerifyCheck]:
+        resp = client.get(
+            "customer",
+            params={"customerName": cust_name_13, "count": 5, "fields": "id,postalAddress(*)"},
+        )
+        custs = resp.json().get("values", [])
+        if not custs:
+            return [("customer_exists", False, f"No customer '{cust_name_13}'")]
+        cust = custs[0]
+        addr = cust.get("postalAddress", {}) or {}
+        checks: list[VerifyCheck] = [
+            ("customer_exists", True, f"id={cust['id']}"),
+            (
+                "address_line",
+                addr.get("addressLine1") == cust_address_13,
+                f"expected {cust_address_13!r}, got {addr.get('addressLine1')!r}",
+            ),
+            (
+                "postal_code",
+                addr.get("postalCode") == cust_postal_13,
+                f"expected {cust_postal_13!r}, got {addr.get('postalCode')!r}",
+            ),
+            (
+                "city",
+                addr.get("city") == cust_city_13,
+                f"expected {cust_city_13!r}, got {addr.get('city')!r}",
+            ),
         ]
         return checks
 
@@ -771,10 +1133,10 @@ def build_tasks() -> list[SyntheticTask]:
             ),
             "setup": setup_task_8,
             "verify": verify_task_8,
-            # GET project + GET employee + GET activity + POST timesheet/entry
-            # + PUT project/hourlyRates + POST invoice (inline order) = 6
-            "optimal": 6,
-            "best": 6,
+            # GET employee + GET project(fields=projectActivities(*),projectHourlyRates(*))
+            # + PUT project/hourlyRates + POST timesheet/entry + POST invoice (inline order) = 5
+            "optimal": 5,
+            "best": 5,
         },
         {
             "name": "9.1 Multi-line Invoice Org#+Prod# (Norwegian)",
@@ -817,6 +1179,37 @@ def build_tasks() -> list[SyntheticTask]:
             # + PUT /order/:invoice + GET /invoice/paymentType + PUT /invoice/:payment = 5
             "optimal": 5,
             "best": 5,
+        },
+        {
+            "name": "12.1 Credit Note (French)",
+            "prompt": (
+                f'Créez une note de crédit pour la facture du client "{cust_name_12}" '
+                f"avec la date du 21 mars 2026 et le commentaire « Annulation de service »."
+            ),
+            "setup": setup_task_12,
+            "verify": verify_task_12,
+            # GET /customer + GET /invoice + PUT /invoice/:createCreditNote = 3
+            "optimal": 3,
+            "best": 3,
+        },
+        {
+            "name": "13.1 Customer from PDF (structured file)",
+            "prompt": (
+                "The attached PDF is an offer letter (tilbudsbrev). "
+                "Extract the customer details from the PDF and create the customer in Tripletex "
+                "with the name, organization number, and postal address from the document."
+            ),
+            "files": [
+                {
+                    "filename": "tilbudsbrev.pdf",
+                    "content_base64": pdf_b64_13,
+                    "mime_type": "application/pdf",
+                },
+            ],
+            "verify": verify_task_13,
+            # POST /customer = 1
+            "optimal": 1,
+            "best": 1,
         },
     ]
 
@@ -899,17 +1292,21 @@ def run_task_server(task: SyntheticTask, tx_client: httpx.Client) -> dict:
     """Run a task against the HTTP solve server."""
     bearer_token = os.environ["BEARER_TOKEN"]
 
+    payload: dict[str, Any] = {
+        "prompt": task["prompt"],
+        "tripletex_credentials": {
+            "base_url": TRIPLETEX_BASE_URL,
+            "session_token": TRIPLETEX_SESSION_TOKEN,
+        },
+    }
+    if task.get("files"):
+        payload["files"] = task["files"]
+
     start = time.time()
     resp = httpx.post(
         f"{BASE}/solve",
         headers={"Authorization": f"Bearer {bearer_token}"},
-        json={
-            "prompt": task["prompt"],
-            "tripletex_credentials": {
-                "base_url": TRIPLETEX_BASE_URL,
-                "session_token": TRIPLETEX_SESSION_TOKEN,
-            },
-        },
+        json=payload,
         timeout=300,
     )
     elapsed = time.time() - start
@@ -948,7 +1345,30 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
     # Prevent "nested session" detection when invoked from within Claude Code
     env.pop("CLAUDECODE", None)
 
-    prompt = f"## Task\n\n{task['prompt']}"
+    # Save file attachments to temp files so the CLI agent can read them
+    temp_file_paths: list[Path] = []
+    file_instructions = ""
+    if task.get("files"):
+        tmpdir = Path(tempfile.mkdtemp(prefix="tx_files_"))
+        for f in task["files"]:
+            if isinstance(f, dict):
+                filename = f["filename"]
+                data = base64.b64decode(f["content_base64"])
+            else:
+                filename = "attachment.bin"
+                data = base64.b64decode(f)
+            fpath = tmpdir / filename
+            fpath.write_bytes(data)
+            temp_file_paths.append(fpath)
+            print(f"  [setup] Saved file attachment: {fpath}")
+        paths_str = ", ".join(str(p) for p in temp_file_paths)
+        file_instructions = (
+            f"\n\n## Attached Files\n\n"
+            f"The following files are attached to this task. "
+            f"Use the Read tool to read them: {paths_str}"
+        )
+
+    prompt = f"## Task\n\n{task['prompt']}{file_instructions}"
 
     cmd = [
         "claude",
@@ -958,6 +1378,7 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
         system_prompt,
         "--tools",
         "Bash",
+        "Read",
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--output-format",
@@ -970,7 +1391,7 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
     stderr_fh = Path(stderr_path).open("w")  # noqa: SIM115
     start = time.time()
     try:
-        proc = subprocess.Popen(  # noqa: S603
+        proc = subprocess.Popen(
             cmd,
             env=env,
             cwd=_PROJECT_ROOT.parent,
@@ -1029,16 +1450,16 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
             if log_file.exists() and log_file.stat().st_size > 0
             else []
         )
-        _COUNTED_METHODS = {"GET", "POST", "PUT", "DELETE"}
-        _FREE_METHODS = {"READ_SKILL", "REVIEW_PLAN"}
+        counted_methods = {"GET", "POST", "PUT", "DELETE"}
+        free_methods = {"READ_SKILL", "REVIEW_PLAN"}
         for c in calls:
             method = c["method"]
-            if method not in _COUNTED_METHODS and method not in _FREE_METHODS:
+            if method not in counted_methods and method not in free_methods:
                 raise ValueError(
                     f"Unknown call method in log: {method!r}. "
-                    "Add it to _COUNTED_METHODS or _FREE_METHODS."
+                    "Add it to counted_methods or free_methods.",
                 )
-        api_calls = sum(1 for c in calls if c["method"] in _COUNTED_METHODS)
+        api_calls = sum(1 for c in calls if c["method"] in counted_methods)
         errors = sum(1 for c in calls if c.get("is_error"))
 
         status_code = 200 if proc.returncode == 0 else 500
@@ -1070,7 +1491,7 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
             print(f"Exit: {proc.returncode} | Time: {elapsed:.1f}s | {calls_str}")
 
         # Print call log summary
-        counted = [c for c in calls if c["method"] in _COUNTED_METHODS]
+        counted = [c for c in calls if c["method"] in counted_methods]
         if counted:
             print("  [calls]")
             for i, c in enumerate(counted, 1):
@@ -1105,6 +1526,10 @@ def run_task_local(task: SyntheticTask, system_prompt: str, model: str | None) -
         stderr_fh.close()
         Path(stderr_path).unlink(missing_ok=True)
         Path(log_path).unlink(missing_ok=True)
+        for fpath in temp_file_paths:
+            fpath.unlink(missing_ok=True)
+        if temp_file_paths:
+            temp_file_paths[0].parent.rmdir()
 
     return result
 
@@ -1141,10 +1566,13 @@ def run_task(
             verification = _verify_checks(checks)
             result["verification"] = verification
             status = "PASS" if verification["all_passed"] else "FAIL"
-            print(f"  [verify] {status} ({verification['passed']}/{verification['total']})", flush=True)
+            print(
+                f"  [verify] {status} ({verification['passed']}/{verification['total']})",
+                flush=True,
+            )
             for line in verification["failures"]:
                 print(f"  {line}", flush=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             result["verification"] = {"all_passed": False, "error": str(e)}
             print(f"  [verify] ERROR: {e}", flush=True)
 
@@ -1164,9 +1592,7 @@ def print_summary(results: list[dict]) -> None:
         v = r.get("verification", {})
         if v.get("error"):
             vfy = "ERROR"
-        elif v.get("all_passed"):
-            vfy = f"{v['passed']}/{v['total']}"
-        elif v:
+        elif v.get("all_passed") or v:
             vfy = f"{v['passed']}/{v['total']}"
         else:
             vfy = "-"

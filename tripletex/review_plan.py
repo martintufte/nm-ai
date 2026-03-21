@@ -10,10 +10,7 @@ from pathlib import Path
 
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
-_OPTIMALITY_SKILLS = "\n\n".join(
-    p.read_text()
-    for p in sorted(_SKILLS_DIR.glob("_optimality*.md"))
-)
+_OPTIMALITY_SKILLS = "\n\n".join(p.read_text() for p in sorted(_SKILLS_DIR.glob("_optimality*.md")))
 
 _REVIEW_SYSTEM_PROMPT = f"""\
 You are an API call plan reviewer. You receive a plan listing intended \
@@ -45,7 +42,9 @@ def review_plan(plan: str) -> str:
     Returns:
         LLM critique of the plan against optimality techniques.
     """
-    from anthropic import Anthropic
+    from anthropic import Anthropic  # noqa: PLC0415
+    from anthropic.types import TextBlock  # noqa: PLC0415
+
     client = Anthropic()
     response = client.messages.create(
         model=REVIEW_MODEL,
@@ -53,4 +52,6 @@ def review_plan(plan: str) -> str:
         system=_REVIEW_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": plan}],
     )
-    return response.content[0].text
+    block = response.content[0]
+    assert isinstance(block, TextBlock), f"Expected TextBlock, got {type(block).__name__}"
+    return block.text

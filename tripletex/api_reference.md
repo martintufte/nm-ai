@@ -89,7 +89,7 @@ Body: `CustomerCategory` (see above)
 Get customer by ID.
 
 ### `PUT /customer/{id}`
-Update customer. 
+Update customer.
 
 **Note:** Nested objects (e.g. `postalAddress`) require their own `id`/`version` or updates are silently ignored.
 
@@ -265,7 +265,7 @@ Create employment details.
 Find employment details by ID.
 
 ### `PUT /employee/employment/details/{id}`
-Update employment details. 
+Update employment details.
 
 Body: `EmploymentDetails` (see above)
 
@@ -338,7 +338,7 @@ Find working hours scheme ID.
 Find employment by ID.
 
 ### `PUT /employee/employment/{id}`
-Update employemnt. 
+Update employemnt.
 
 Body: `Employment` (see above)
 
@@ -384,7 +384,7 @@ Create hourly cost and rate.
 Find hourly cost and rate by ID.
 
 ### `PUT /employee/hourlyCostAndRate/{id}`
-Update hourly cost and rate. 
+Update hourly cost and rate.
 
 Body: `HourlyCostAndRate` (see above)
 
@@ -410,7 +410,7 @@ Create next of kin.
 Find next of kin by ID.
 
 ### `PUT /employee/nextOfKin/{id}`
-Update next of kin. 
+Update next of kin.
 
 Body: `NextOfKin` (see above)
 
@@ -465,7 +465,7 @@ Query params: `employeeId`, `date`
 Find standard time by ID.
 
 ### `PUT /employee/standardTime/{id}`
-Update standard time. 
+Update standard time.
 
 Body: `StandardTime` (see above)
 
@@ -818,7 +818,7 @@ Create order.
   - `isSubscriptionAutoInvoicing`: boolean — Automatic invoicing. Starts when the subscription is approved
   - `preliminaryInvoice`: Invoice
   - `sendMethodDescription`: string — Description of how this invoice will be sent
-  - `invoiceOnAccountVatHigh`: boolean — Is the on account(a konto) amounts including vat 
+  - `invoiceOnAccountVatHigh`: boolean — Is the on account(a konto) amounts including vat
   - `invoiceSMSNotificationNumber`: string — The phone number of the receiver of sms notifications. Must be a norwegian ph...
   - `markUpOrderLines`: number — Set mark-up (%) for order lines.
   - `discountPercentage`: number — Default discount percentage for order lines.
@@ -1373,7 +1373,7 @@ Find project hourly rates corresponding with sent data.
 Query params: `id`, `projectId`, `type`, `startDateFrom`, `startDateTo`, `showInProjectOrder`
 
 ### `POST /project/hourlyRates`
-Create a project hourly rate. 
+Create a project hourly rate.
 
 **ProjectHourlyRate** writable fields:
   - `project`: Project
@@ -1405,7 +1405,7 @@ Find project specific rates corresponding with sent data.
 Query params: `id`, `projectHourlyRateId`, `employeeId`, `activityId`
 
 ### `POST /project/hourlyRates/projectSpecificRates`
-Create new project specific rate. 
+Create new project specific rate.
 
 **ProjectSpecificRate** writable fields:
   - `hourlyRate`: number
@@ -1426,7 +1426,7 @@ Create multiple new project specific rates.
 Update multiple project specific rates.
 
 ### `DELETE /project/hourlyRates/projectSpecificRates/{id}`
-Delete project specific rate 
+Delete project specific rate
 
 ### `GET /project/hourlyRates/projectSpecificRates/{id}`
 Find project specific rate by ID.
@@ -1448,7 +1448,7 @@ Query params: `ids` **(required)**
   - `fixedRate`: number — Fixed Hourly rates if hourlyRateModel is TYPE_FIXED_HOURLY_RATE.
 
 ### `DELETE /project/hourlyRates/{id}`
-Delete Project Hourly Rate 
+Delete Project Hourly Rate
 
 ### `GET /project/hourlyRates/{id}`
 Find project hourly rate by ID.

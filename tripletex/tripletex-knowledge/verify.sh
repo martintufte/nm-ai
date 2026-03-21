@@ -280,6 +280,15 @@ api POST project "{\"name\":\"Verify Project $TS\",\"projectManager\":{\"id\":${
 expect_success T31 "POST /project (with startDate)"
 IDS[PROJ_ID]=$(extract_id)
 
+# T32: Subcontract without displayName → 422
+api POST "project/subcontract" "{\"project\":{\"id\":${IDS[PROJ_ID]}},\"name\":\"SubNoDisplay $TS\",\"budgetExpensesCurrency\":1000}"
+expect_fail T32 "POST /project/subcontract (no displayName)"
+
+# T33: Subcontract with displayName → 201
+api POST "project/subcontract" "{\"project\":{\"id\":${IDS[PROJ_ID]}},\"displayName\":\"SubWithDisplay $TS\",\"name\":\"SubWithDisplay $TS\",\"budgetExpensesCurrency\":1000}"
+expect_success T33 "POST /project/subcontract (with displayName)"
+IDS[SUBCONTRACT_ID]=$(extract_id)
+
 echo ""
 
 # ======================================================================
@@ -374,6 +383,10 @@ if [ -n "${IDS[INV_ID]:-}" ]; then
   api PUT "invoice/${IDS[INV_ID]}/:payment?paymentDate=$TODAY&paymentTypeId=${IDS[PAY_TYPE_ID]}&paidAmount=500.0" ""
   expect_success T54 "PUT /invoice/:payment (query params)" 200
 
+  # T55a: Credit note with body (wrong) → 422 [gotcha: query params, not body]
+  api PUT "invoice/${IDS[INV_ID]}/:createCreditNote" "{\"date\":\"$TODAY\",\"comment\":\"VerifyTest\"}"
+  expect_fail T55a "PUT /invoice/:createCreditNote (body, wrong) [gotcha #8]"
+
   # T55: Credit note with query params → 200
   api PUT "invoice/${IDS[INV_ID]}/:createCreditNote?date=$TODAY&comment=VerifyTest" ""
   if [ "$LAST_CODE" = "200" ] || [ "$LAST_CODE" = "201" ]; then
@@ -386,6 +399,7 @@ if [ -n "${IDS[INV_ID]:-}" ]; then
 else
   record SKIP T53 "PUT /invoice/:payment (body)" "no invoice"
   record SKIP T54 "PUT /invoice/:payment (query params)" "no invoice"
+  record SKIP T55a "PUT /invoice/:createCreditNote (body)" "no invoice"
   record SKIP T55 "PUT /invoice/:createCreditNote" "no invoice"
 fi
 
@@ -1568,6 +1582,81 @@ else: print(vs[0].get('customer',{}).get('id',''))
   fi
 else
   record SKIP T270 "GET /project returns customer.id inline" "no employee or customer"
+fi
+
+# T271: GET /project returns projectActivities as STUBS by default
+if [ -n "${IDS[TS_PROJ_ID]:-}" ] && [ -n "${IDS[PROJ_ACT_LINK_ID]:-}" ]; then
+  api GET "project/${IDS[TS_PROJ_ID]}"
+  if [ "$LAST_CODE" = "200" ]; then
+    pa_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin).get('value',{})
+pas=v.get('projectActivities',[])
+if not pas: print('empty')
+elif 'activity' in pas[0]: print('expanded')
+elif 'id' in pas[0] and 'activity' not in pas[0]: print('stub')
+else: print(f'unknown:{list(pas[0].keys())}')
+" 2>/dev/null)
+    if [ "$pa_shape" = "stub" ]; then
+      record PASS T271 "GET /project projectActivities are STUBS by default" "only id+url, no activity ref"
+    elif [ "$pa_shape" = "expanded" ]; then
+      record FAIL T271 "GET /project projectActivities are STUBS" "got expanded without fields param"
+    else
+      record FAIL T271 "GET /project projectActivities shape" "$pa_shape"
+    fi
+  else
+    record FAIL T271 "GET /project for projectActivities shape" "got $LAST_CODE"
+  fi
+
+  # T272: GET /project with fields=projectActivities(*) returns EXPANDED activity data
+  api GET "project/${IDS[TS_PROJ_ID]}?fields=projectActivities(*)"
+  if [ "$LAST_CODE" = "200" ]; then
+    pa_expanded=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin).get('value',{})
+pas=v.get('projectActivities',[])
+if not pas: print('empty')
+elif 'activity' in pas[0]: print('expanded')
+else: print(f'stub:{list(pas[0].keys())}')
+" 2>/dev/null)
+    if [ "$pa_expanded" = "expanded" ]; then
+      record PASS T272 "GET /project fields=projectActivities(*) → expanded" "activity ref present"
+    else
+      record FAIL T272 "GET /project fields=projectActivities(*)" "$pa_expanded"
+    fi
+  else
+    record FAIL T272 "GET /project fields=projectActivities(*)" "got $LAST_CODE"
+  fi
+else
+  record SKIP T271 "GET /project projectActivities stubs" "no project with activity"
+  record SKIP T272 "GET /project fields=projectActivities(*)" "no project with activity"
+fi
+
+# T273: GET /project returns projectHourlyRates as STUBS by default
+if [ -n "${IDS[HR_PROJ_ID]:-}" ]; then
+  api GET "project/${IDS[HR_PROJ_ID]}"
+  if [ "$LAST_CODE" = "200" ]; then
+    hr_shape=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin).get('value',{})
+hrs=v.get('projectHourlyRates',[])
+if not hrs: print('empty')
+elif 'hourlyRateModel' in hrs[0]: print('expanded')
+elif 'id' in hrs[0] and 'hourlyRateModel' not in hrs[0]: print('stub')
+else: print(f'unknown:{list(hrs[0].keys())}')
+" 2>/dev/null)
+    if [ "$hr_shape" = "stub" ]; then
+      record PASS T273 "GET /project projectHourlyRates are STUBS by default" "only id+url, no hourlyRateModel"
+    elif [ "$hr_shape" = "expanded" ]; then
+      record FAIL T273 "GET /project projectHourlyRates are STUBS" "got expanded without fields param"
+    else
+      record FAIL T273 "GET /project projectHourlyRates shape" "$hr_shape"
+    fi
+  else
+    record FAIL T273 "GET /project for projectHourlyRates shape" "got $LAST_CODE"
+  fi
+else
+  record SKIP T273 "GET /project projectHourlyRates stubs" "no project"
 fi
 
 # ----- Field expansion gotchas -----
