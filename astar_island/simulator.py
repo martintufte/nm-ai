@@ -30,11 +30,11 @@ VIEWPORT_SIZE = 15
 # Class index to raw grid value (inverse of VIEWPORT_VALUE_TO_CLASS)
 CLASS_TO_RAW_VALUE = {
     0: 11,  # empty → plains
-    1: 1,   # settlement
-    2: 2,   # port
-    3: 3,   # ruin
-    4: 4,   # forest
-    5: 5,   # mountain
+    1: 1,  # settlement
+    2: 2,  # port
+    3: 3,  # ruin
+    4: 4,  # forest
+    5: 5,  # mountain
 }
 
 
@@ -182,7 +182,11 @@ class AstarIslandSimulator:
         self.queries_used += 1
         LOGGER.debug(
             "Simulate seed=%d viewport=(%d,%d) — query %d/%d",
-            seed_index, x, y, self.queries_used, self.queries_max,
+            seed_index,
+            x,
+            y,
+            self.queries_used,
+            self.queries_max,
         )
 
         return {

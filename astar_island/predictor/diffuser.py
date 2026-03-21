@@ -77,11 +77,11 @@ DEFAULT_NUM_STEPS = 3
 VIEWPORT_VALUE_TO_CLASS = {
     10: 0,  # ocean/water
     11: 0,  # plains/empty land
-    1: 1,   # settlement
-    2: 2,   # port
-    3: 3,   # ruin
-    4: 4,   # forest
-    5: 5,   # mountain
+    1: 1,  # settlement
+    2: 2,  # port
+    3: 3,  # ruin
+    4: 4,  # forest
+    5: 5,  # mountain
 }
 
 
@@ -171,7 +171,11 @@ class DiffusionPredictor(IslandPredictor):
         static_probs = _build_prior(seed_state)
 
         probs = _apply_diffusion(
-            probs, self.kernels, self.num_steps, static_mask, static_probs,
+            probs,
+            self.kernels,
+            self.num_steps,
+            static_mask,
+            static_probs,
         )
 
         return probs
@@ -196,10 +200,13 @@ class DiffusionPredictor(IslandPredictor):
         # Override observed region as hard evidence
         probs = probs.copy()
         y0, x0 = viewport_y, viewport_x
-        probs[y0:y0 + vh, x0:x0 + vw] = one_hot
+        probs[y0 : y0 + vh, x0 : x0 + vw] = one_hot
 
         LOGGER.info(
             "Seed %d: observed viewport (%d, %d) — %d cells",
-            seed_state.seed_index, viewport_x, viewport_y, vh * vw,
+            seed_state.seed_index,
+            viewport_x,
+            viewport_y,
+            vh * vw,
         )
         return probs

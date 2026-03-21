@@ -5,6 +5,7 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from astar_island.client import N_CLASSES
@@ -13,6 +14,12 @@ from astar_island.config import get_access_token
 
 LOGGER = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent / "data"
+
+
+def _round_dir(round_number: int) -> Path:
+    """Return the directory for a given round."""
+    return DATA_DIR / f"round_{round_number:02d}"
+
 
 # Mapping from API grid values to prediction classes
 GRID_VALUE_TO_CLASS = {
@@ -31,6 +38,96 @@ def grid_to_class_map(grid: np.ndarray) -> np.ndarray:
     for raw_val, class_idx in GRID_VALUE_TO_CLASS.items():
         class_map[grid == raw_val] = class_idx
     return class_map
+
+
+def _save_seed_plots(
+    round_number: int,
+    raw_grids: np.ndarray,
+    ground_truth: np.ndarray | None,
+) -> None:
+    """Generate and save per-seed visualizations into the round directory."""
+    from astar_island.model import find_coastal_cells  # noqa: PLC0415
+    from astar_island.visualize import plot_full_board  # noqa: PLC0415
+    from astar_island.visualize import plot_heatmap_combined  # noqa: PLC0415
+    from astar_island.visualize import plot_heatmap_grid  # noqa: PLC0415
+    from astar_island.visualize import plot_mask_grid  # noqa: PLC0415
+
+    round_dir = _round_dir(round_number)
+    n_seeds = raw_grids.shape[0]
+
+    for seed_idx in range(n_seeds):
+        seed_dir = round_dir / f"seed_{seed_idx}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_grid = raw_grids[seed_idx]
+        water_mask = raw_grid == 10
+        plains_mask = raw_grid == 11
+        mountain_mask = raw_grid == 5
+        settlement_mask = (raw_grid == 1) | (raw_grid == 2)
+        forest_mask = raw_grid == 4
+        coastal_mask = find_coastal_cells(water_mask)
+
+        # Board overview
+        fig, ax = plt.subplots(figsize=(8, 8), facecolor="#1e1e1e")
+        plot_full_board(raw_grid, title=f"Round {round_number} — Seed {seed_idx}", ax=ax)
+        ax.set_title(ax.get_title(), color="white")
+        fig.tight_layout()
+        fig.savefig(
+            seed_dir / "board.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
+
+        # Terrain masks
+        fig = plot_mask_grid(
+            raw_grid=raw_grid,
+            water_mask=water_mask,
+            plains_mask=plains_mask,
+            mountain_mask=mountain_mask,
+            settlement_mask=settlement_mask,
+            forest_mask=forest_mask,
+            coastal_mask=coastal_mask,
+            suptitle=f"Round {round_number} — Seed {seed_idx} — Terrain Masks",
+        )
+        fig.savefig(
+            seed_dir / "masks.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
+
+        # Ground truth heatmaps
+        if ground_truth is not None:
+            gt = ground_truth[seed_idx]
+
+            fig = plot_heatmap_grid(
+                gt,
+                suptitle=f"Round {round_number} — Seed {seed_idx} — Ground Truth",
+            )
+            fig.savefig(
+                seed_dir / "gt_channels.png",
+                dpi=150,
+                bbox_inches="tight",
+                facecolor=fig.get_facecolor(),
+            )
+            plt.close(fig)
+
+            fig = plot_heatmap_combined(
+                gt,
+                title=f"Round {round_number} — Seed {seed_idx} — Ground Truth Combined",
+            )
+            fig.savefig(
+                seed_dir / "gt_combined.png",
+                dpi=150,
+                bbox_inches="tight",
+                facecolor=fig.get_facecolor(),
+            )
+            plt.close(fig)
+
+        LOGGER.info("Saved plots for round %d seed %d", round_number, seed_idx)
 
 
 def fetch_round_data(
@@ -79,8 +176,11 @@ def fetch_round_data(
                 )
                 raise
 
-    # Save to .npz
-    out_path = DATA_DIR / f"round_{round_number:02d}.npz"
+    # Save to round subdirectory
+    round_dir = _round_dir(round_number)
+    round_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = round_dir / "data.npz"
     save_kwargs = {
         "raw_grids": raw_grids,
         "class_grids": class_grids,
@@ -97,8 +197,11 @@ def fetch_round_data(
     np.savez_compressed(out_path, **save_kwargs)  # ty: ignore[invalid-argument-type]
 
     # Save settlements as JSON (structured data, not arrays)
-    settlements_path = DATA_DIR / f"round_{round_number:02d}_settlements.json"
+    settlements_path = round_dir / "settlements.json"
     settlements_path.write_text(json.dumps(all_settlements, indent=2))
+
+    # Generate per-seed plots
+    _save_seed_plots(round_number, raw_grids, ground_truth if has_ground_truth else None)
 
     LOGGER.info(
         "Saved round %d (%s): %d seeds, ground_truth=%s → %s",
@@ -106,9 +209,9 @@ def fetch_round_data(
         round_id[:8],
         n_seeds,
         has_ground_truth,
-        out_path,
+        round_dir,
     )
-    return out_path
+    return round_dir
 
 
 def fetch_all_rounds(client: AstarIslandClient) -> list[Path]:
@@ -119,11 +222,11 @@ def fetch_all_rounds(client: AstarIslandClient) -> list[Path]:
     for r in sorted(rounds, key=lambda x: x["round_number"]):
         round_id = r["id"]
         round_number = r["round_number"]
-        out_path = DATA_DIR / f"round_{round_number:02d}.npz"
+        round_dir = _round_dir(round_number)
 
-        if out_path.exists():
+        if (round_dir / "data.npz").exists():
             LOGGER.info("Round %d already saved, skipping", round_number)
-            paths.append(out_path)
+            paths.append(round_dir)
             continue
 
         path = fetch_round_data(client, round_id, round_number)
@@ -139,10 +242,10 @@ def load_round(round_number: int) -> dict:
     settlement_masks, port_masks, forest_masks, plains_masks, and optionally ground_truth.
     Settlements are loaded from the companion JSON file.
     """
-    npz_path = DATA_DIR / f"round_{round_number:02d}.npz"
-    data = dict(np.load(npz_path))
+    round_dir = _round_dir(round_number)
+    data = dict(np.load(round_dir / "data.npz"))
 
-    settlements_path = DATA_DIR / f"round_{round_number:02d}_settlements.json"
+    settlements_path = round_dir / "settlements.json"
     if settlements_path.exists():
         data["settlements"] = json.loads(settlements_path.read_text())
 
@@ -156,16 +259,6 @@ def main() -> None:
     client = AstarIslandClient(token=get_access_token())
     paths = fetch_all_rounds(client)
     LOGGER.info("Fetched %d rounds", len(paths))
-
-    # Print summary of latest round
-    latest = sorted(paths)[-1]
-    data = np.load(latest)
-    n_seeds = data["raw_grids"].shape[0]
-    for seed_idx in range(n_seeds):
-        grid = data["class_grids"][seed_idx]
-        unique, counts = np.unique(grid, return_counts=True)
-        class_counts = ", ".join(f"c{v}={c}" for v, c in zip(unique, counts, strict=False))
-        LOGGER.info(f"  Seed {seed_idx}: {class_counts}")
 
 
 if __name__ == "__main__":

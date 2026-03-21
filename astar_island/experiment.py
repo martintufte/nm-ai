@@ -73,26 +73,42 @@ def _save_heatmaps(
 
     # Ground truth channel heatmaps
     fig = plot_heatmap_grid(ground_truth, suptitle=f"Seed {seed_idx} — Ground Truth")
-    fig.savefig(seed_dir / "gt_channels.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig(
+        seed_dir / "gt_channels.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+    )
     plt.close(fig)
 
     # Ground truth combined
     fig = plot_heatmap_combined(ground_truth, title=f"Seed {seed_idx} — Ground Truth Combined")
-    fig.savefig(seed_dir / "gt_combined.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig(
+        seed_dir / "gt_combined.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+    )
     plt.close(fig)
 
     # Prediction channel heatmaps
     fig = plot_heatmap_grid(predictions, suptitle=f"Seed {seed_idx} — Predictions")
-    fig.savefig(seed_dir / "pred_channels.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig(
+        seed_dir / "pred_channels.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+    )
     plt.close(fig)
 
     # Prediction combined
     fig = plot_heatmap_combined(predictions, title=f"Seed {seed_idx} — Predictions Combined")
-    fig.savefig(seed_dir / "pred_combined.png", dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    fig.savefig(
+        seed_dir / "pred_combined.png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+    )
     plt.close(fig)
 
 
@@ -107,15 +123,27 @@ def _save_score_summary(
 
     fig, ax = plt.subplots(figsize=(8, 4))
     bars = ax.bar([f"Seed {s}" for s in seeds], values, color="#30b5c7")
-    ax.axhline(avg_score, color="#f08c00", linestyle="--", linewidth=2, label=f"Avg: {avg_score:.1f}")
+    ax.axhline(
+        avg_score,
+        color="#f08c00",
+        linestyle="--",
+        linewidth=2,
+        label=f"Avg: {avg_score:.1f}",
+    )
     ax.set_ylabel("Score")
     ax.set_title("Entropy-Weighted KL Score per Seed")
     ax.set_ylim(0, 100)
     ax.legend()
 
     for bar, val in zip(bars, values, strict=True):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                f"{val:.1f}", ha="center", va="bottom", fontsize=10)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{val:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
     fig.tight_layout()
     fig.savefig(exp_dir / "scores.png", dpi=150, bbox_inches="tight")
@@ -143,15 +171,20 @@ def run_experiment(
     """
     rng = np.random.default_rng(rng_seed)
     sim = AstarIslandSimulator.from_round_number(
-        round_number, queries_max=n_queries, seed=rng_seed,
+        round_number,
+        queries_max=n_queries,
+        seed=rng_seed,
     )
     round_data = sim.get_round(sim.round_id)
     model = IslandModel.from_round_data(round_data, predictor)
 
     LOGGER.info(
         "Round %d: %dx%d map, %d seeds, %d queries",
-        round_number, round_data.map_height, round_data.map_width,
-        round_data.seeds_count, n_queries,
+        round_number,
+        round_data.map_height,
+        round_data.map_width,
+        round_data.seeds_count,
+        n_queries,
     )
 
     # Run viewport queries distributed across seeds
@@ -159,7 +192,10 @@ def run_experiment(
         queries_per_seed = _distribute_queries(n_queries, round_data.seeds_count)
         for seed_idx, seed_n_queries in enumerate(queries_per_seed):
             positions = _pick_viewport_positions(
-                round_data.map_height, round_data.map_width, seed_n_queries, rng,
+                round_data.map_height,
+                round_data.map_width,
+                seed_n_queries,
+                rng,
             )
             for x, y in positions:
                 result = sim.simulate(sim.round_id, seed_idx, x, y)
@@ -196,7 +232,8 @@ def run_experiment(
     # Save heatmaps per seed
     for seed_idx in range(round_data.seeds_count):
         _save_heatmaps(
-            exp_dir, seed_idx,
+            exp_dir,
+            seed_idx,
             ground_truth=sim.ground_truth[seed_idx],
             predictions=predictions[seed_idx],
         )
@@ -212,15 +249,19 @@ def _build_predictor(name: str, ground_truth: NDArray[np.float64] | None = None)
     """Build a predictor by name."""
     if name == "diffusion":
         from astar_island.predictor import DiffusionPredictor  # noqa: PLC0415
+
         return DiffusionPredictor()
     if name == "empty":
         from astar_island.predictor import EmptyPredictor  # noqa: PLC0415
+
         return EmptyPredictor()
     if name == "uniform":
         from astar_island.predictor import UniformPredictor  # noqa: PLC0415
+
         return UniformPredictor()
     if name == "perfect":
         from astar_island.predictor import PerfectPredictor  # noqa: PLC0415
+
         if ground_truth is None:
             msg = "PerfectPredictor requires ground truth"
             raise ValueError(msg)
@@ -236,11 +277,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Astar Island offline experiment")
     parser.add_argument("--round", type=int, required=True, help="Round number")
     parser.add_argument(
-        "--predictor", default="diffusion",
+        "--predictor",
+        default="diffusion",
         choices=["diffusion", "empty", "uniform", "perfect"],
         help="Predictor to benchmark (default: diffusion)",
     )
-    parser.add_argument("--queries", type=int, default=0, help="Number of viewport queries (default: 0)")
+    parser.add_argument(
+        "--queries",
+        type=int,
+        default=0,
+        help="Number of viewport queries (default: 0)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed (default: 42)")
     args = parser.parse_args()
 
@@ -248,6 +295,7 @@ def main() -> None:
     ground_truth = None
     if args.predictor == "perfect":
         from astar_island.fetch_data import load_round  # noqa: PLC0415
+
         data = load_round(args.round)
         ground_truth = data["ground_truth"]
 

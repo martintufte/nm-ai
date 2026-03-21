@@ -35,7 +35,7 @@ def find_coastal_cells(water_mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
     return coastal & ~water_mask
 
 
-def parse_raw_grid(raw_grid: NDArray[np.int_]) -> dict[str, NDArray[np.bool_]]:
+def parse_raw_grid(raw_grid: NDArray[np.int16]) -> dict[str, NDArray[np.bool_]]:
     """Parse a raw API grid (values 1, 2, 4, 5, 10, 11) into terrain masks."""
     water_mask = raw_grid == 10
     plains_mask = raw_grid == 11

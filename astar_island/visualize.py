@@ -5,26 +5,12 @@ Generates:
 2. 2x3 grid of individual terrain masks (water, plains, mountain, settlement, forest, coastal)
 
 Colors are matched to the official competition visualization.
-
-Usage:
-    python -m astar_island.visualize --round 1 --seed 0
 """
-
-import argparse
-import logging
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from numpy.typing import NDArray
-
-from astar_island.fetch_data import load_round
-from astar_island.model import find_coastal_cells
-
-LOGGER = logging.getLogger(__name__)
-
-PLOTS_DIR = Path(__file__).parent / "plots"
 
 # Colors matched to the official app.ainm.no visualization
 TERRAIN_COLORS = {
@@ -189,82 +175,3 @@ def plot_heatmap_combined(
     ax.set_yticks([])
     fig.tight_layout()
     return fig
-
-
-def visualize_round(round_number: int, seed_index: int) -> None:
-    """Generate and save visualizations for a specific round and seed."""
-    data = load_round(round_number)
-    raw_grid = data["raw_grids"][seed_index]
-    water_mask = data["water_masks"][seed_index]
-    plains_mask = data["plains_masks"][seed_index]
-    mountain_mask = data["mountain_masks"][seed_index]
-    settlement_mask = data["settlement_masks"][seed_index] | data["port_masks"][seed_index]
-    forest_mask = data["forest_masks"][seed_index]
-    coastal_mask = find_coastal_cells(water_mask)
-
-    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-    prefix = f"round_{round_number:02d}_seed_{seed_index}"
-
-    # Full board
-    fig, ax = plt.subplots(figsize=(8, 8), facecolor="#1e1e1e")
-    plot_full_board(raw_grid, title=f"Round {round_number} — Seed {seed_index}", ax=ax)
-    ax.set_title(ax.get_title(), color="white")
-    fig.tight_layout()
-    board_path = PLOTS_DIR / f"{prefix}_board.png"
-    fig.savefig(board_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-
-    # Mask grid
-    fig = plot_mask_grid(
-        raw_grid=raw_grid,
-        water_mask=water_mask,
-        plains_mask=plains_mask,
-        mountain_mask=mountain_mask,
-        settlement_mask=settlement_mask,
-        forest_mask=forest_mask,
-        coastal_mask=coastal_mask,
-        suptitle=f"Round {round_number} — Seed {seed_index} — Terrain Masks",
-    )
-    masks_path = PLOTS_DIR / f"{prefix}_masks.png"
-    fig.savefig(masks_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-
-    LOGGER.info("Saved: %s", board_path)
-    LOGGER.info("Saved: %s", masks_path)
-
-    # Ground truth heatmaps (if available)
-    if "ground_truth" in data and not np.isnan(data["ground_truth"]).all():
-        gt = data["ground_truth"][seed_index]
-
-        fig = plot_heatmap_grid(
-            gt,
-            suptitle=f"Round {round_number} — Seed {seed_index} — Ground Truth Channels",
-        )
-        gt_channels_path = PLOTS_DIR / f"{prefix}_gt_channels.png"
-        fig.savefig(gt_channels_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close(fig)
-        LOGGER.info("Saved: %s", gt_channels_path)
-
-        fig = plot_heatmap_combined(
-            gt,
-            title=f"Round {round_number} — Seed {seed_index} — Ground Truth Combined",
-        )
-        gt_combined_path = PLOTS_DIR / f"{prefix}_gt_combined.png"
-        fig.savefig(gt_combined_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close(fig)
-        LOGGER.info("Saved: %s", gt_combined_path)
-    else:
-        LOGGER.warning("No ground truth available for round %d", round_number)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Visualize Astar Island terrain maps")
-    parser.add_argument("--round", type=int, default=1, help="Round number (default: 1)")
-    parser.add_argument("--seed", type=int, default=0, help="Seed index 0-4 (default: 0)")
-    args = parser.parse_args()
-
-    visualize_round(args.round, args.seed)
-
-
-if __name__ == "__main__":
-    main()
