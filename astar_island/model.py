@@ -140,6 +140,7 @@ class IslandModel:
     initial_states: list[SeedState]
     initial_grids: list[NDArray[np.int16]]
     probs: dict[int, NDArray[np.float64]]
+    query_counts: dict[int, NDArray[np.int32]]
     predictor: IslandPredictor
     rules: GameRules = field(default_factory=GameRules)
     observed_viewports: list[tuple[int, int, int, NDArray[np.int16]]] = field(
@@ -158,11 +159,13 @@ class IslandModel:
         initial_grids = [seed_data.grid for seed_data in round_data.seeds]
 
         probs = create_empty_probs(h=h, w=w, n_seeds=round_data.seeds_count)
+        query_counts = {i: np.zeros((h, w), dtype=np.int32) for i in range(round_data.seeds_count)}
 
         return cls(
             initial_states=initial_states,
             initial_grids=initial_grids,
             probs=probs,
+            query_counts=query_counts,
             predictor=predictor,
             rules=GameRules(),
         )
@@ -197,6 +200,14 @@ class IslandModel:
             viewport_x=viewport_x,
             viewport_y=viewport_y,
         )
+
+        # Increment per-cell query counter
+        vh, vw = len(viewport_grid), len(viewport_grid[0])
+        self.query_counts[seed_index][
+            viewport_y : viewport_y + vh,
+            viewport_x : viewport_x + vw,
+        ] += 1
+
         self.observed_viewports.append(
             (seed_index, viewport_x, viewport_y, np.array(viewport_grid, dtype=np.int16)),
         )
