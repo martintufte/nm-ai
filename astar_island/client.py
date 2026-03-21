@@ -45,7 +45,7 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_round(self, round_id: int) -> dict:
+    def get_round(self, round_id: str) -> dict:
         """Get round details + initial map states."""
         resp = self.session.get(f"{BASE_URL}/rounds/{round_id}")
         resp.raise_for_status()
@@ -57,7 +57,7 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def simulate(self, round_id: int, seed_index: int, x: int, y: int) -> dict:
+    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> dict:
         """Query a 15x15 viewport (costs 1 query).
 
         Args:
@@ -81,7 +81,7 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def submit(self, round_id: int, predictions: NDArray[np.float64]) -> dict:
+    def submit(self, round_id: str, predictions: NDArray[np.float64]) -> dict:
         """Submit predictions.
 
         Args:
@@ -106,13 +106,13 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_my_predictions(self, round_id: int) -> dict:
+    def get_my_predictions(self, round_id: str) -> dict:
         """Get submitted predictions for a round."""
         resp = self.session.get(f"{BASE_URL}/my-predictions/{round_id}")
         resp.raise_for_status()
         return resp.json()
 
-    def get_analysis(self, round_id: int, seed_index: int) -> dict:
+    def get_analysis(self, round_id: str, seed_index: int) -> dict:
         """Get post-round ground truth comparison."""
         resp = self.session.get(f"{BASE_URL}/analysis/{round_id}/{seed_index}")
         resp.raise_for_status()

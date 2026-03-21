@@ -1,13 +1,10 @@
-"""Configuration for Astar Island, loaded from .env file."""
-
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from the project root
-_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_ENV_PATH)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
 
 
 def get_access_token() -> str:
