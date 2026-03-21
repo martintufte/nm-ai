@@ -106,7 +106,7 @@ venv/
 # mkdocs documentation
 /site
 
-# Astar island
+# Tripletex
 
 # Norgesgruppen
 # Training data (download separately)
@@ -126,4 +126,5 @@ norgesgruppen/*.pt
 norgesgruppen/submissions/
 norgesgruppen/submissions/
 
-# Tripletex
+# Astar island
+astar_island/experiments/

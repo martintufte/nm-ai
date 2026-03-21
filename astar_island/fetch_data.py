@@ -1,31 +1,13 @@
-"""Fetch and store initial states and ground truth from the Astar Island API.
-
-Saves per-round .npz files containing:
-- grids: (5, 40, 40) int array of initial grid values
-- settlements: list of settlement dicts per seed
-- ground_truth: (5, 40, 40, 6) float array (if available from completed rounds)
-
-Grid value mapping to prediction classes:
-    10 → class 0 (ocean/water)
-    11 → class 0 (plains/empty land)
-     1 → class 1 (settlement)
-     2 → class 2 (port)
-     4 → class 4 (forest)
-     5 → class 5 (mountain)
-
-Usage:
-    python -m astar_island.fetch_data
-"""
+"""Fetch and store initial states and ground truth from the Astar Island API."""
 
 import json
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
-from astar_island.client import MAP_SIZE
-from astar_island.client import NUM_CLASSES
-from astar_island.client import NUM_SEEDS
+from astar_island.client import N_CLASSES
 from astar_island.client import AstarIslandClient
 from astar_island.config import get_access_token
 
@@ -58,17 +40,18 @@ def fetch_round_data(
 ) -> Path:
     """Fetch and save initial states + ground truth for a round."""
     round_data = client.get_round(round_id)
+    n_seeds = round_data.seeds_count
+    h, w = round_data.map_height, round_data.map_width
 
     # Parse initial grids and settlements
-    raw_grids = np.zeros((NUM_SEEDS, MAP_SIZE, MAP_SIZE), dtype=np.int16)
-    class_grids = np.zeros((NUM_SEEDS, MAP_SIZE, MAP_SIZE), dtype=np.int8)
+    raw_grids = np.zeros((n_seeds, h, w), dtype=np.int16)
+    class_grids = np.zeros((n_seeds, h, w), dtype=np.int8)
     all_settlements = []
 
-    for seed_idx in range(NUM_SEEDS):
-        state = round_data["initial_states"][seed_idx]
-        raw_grids[seed_idx] = np.array(state["grid"], dtype=np.int16)
-        class_grids[seed_idx] = grid_to_class_map(raw_grids[seed_idx])
-        all_settlements.append(state["settlements"])
+    for seed_idx, seed in enumerate(round_data.seeds):
+        raw_grids[seed_idx] = seed.grid
+        class_grids[seed_idx] = grid_to_class_map(seed.grid)
+        all_settlements.append([asdict(s) for s in seed.settlements])
 
     # Build per-seed masks from class grids
     water_masks = raw_grids == 10  # only ocean, not plains
@@ -79,16 +62,15 @@ def fetch_round_data(
     plains_masks = raw_grids == 11  # empty land (not ocean)
 
     # Try to fetch ground truth for completed rounds
-    ground_truth = np.full((NUM_SEEDS, MAP_SIZE, MAP_SIZE, NUM_CLASSES), np.nan, dtype=np.float64)
+    ground_truth = np.full((n_seeds, h, w, N_CLASSES), np.nan, dtype=np.float64)
     has_ground_truth = False
 
-    if round_data.get("status") == "completed":
-        for seed_idx in range(NUM_SEEDS):
+    if round_data.status == "completed":
+        for seed_idx in range(n_seeds):
             try:
                 analysis = client.get_analysis(round_id, seed_idx)
-                if analysis.get("ground_truth") is not None:
-                    ground_truth[seed_idx] = np.array(analysis["ground_truth"], dtype=np.float64)
-                    has_ground_truth = True
+                ground_truth[seed_idx] = analysis.ground_truth
+                has_ground_truth = True
             except Exception:
                 LOGGER.warning(
                     "Could not fetch analysis for round %d seed %d",
@@ -122,7 +104,7 @@ def fetch_round_data(
         "Saved round %d (%s): %d seeds, ground_truth=%s → %s",
         round_number,
         round_id[:8],
-        NUM_SEEDS,
+        n_seeds,
         has_ground_truth,
         out_path,
     )
@@ -178,7 +160,8 @@ def main() -> None:
     # Print summary of latest round
     latest = sorted(paths)[-1]
     data = np.load(latest)
-    for seed_idx in range(NUM_SEEDS):
+    n_seeds = data["raw_grids"].shape[0]
+    for seed_idx in range(n_seeds):
         grid = data["class_grids"][seed_idx]
         unique, counts = np.unique(grid, return_counts=True)
         class_counts = ", ".join(f"c{v}={c}" for v, c in zip(unique, counts, strict=False))

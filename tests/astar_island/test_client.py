@@ -8,8 +8,7 @@ import responses
 from requests.exceptions import HTTPError
 
 from astar_island.client import BASE_URL
-from astar_island.client import MAP_SIZE
-from astar_island.client import NUM_CLASSES
+from astar_island.client import N_CLASSES
 from astar_island.client import AstarIslandClient
 
 
@@ -39,12 +38,33 @@ class TestGetRounds:
 class TestGetRound:
     @responses.activate
     def test_returns_round_details(self, client: AstarIslandClient) -> None:
-        payload = {"id": "abc-123", "initial_states": [{"grid": [[0, 5, 1]]}]}
+        payload = {
+            "id": "abc-123",
+            "round_number": 1,
+            "status": "active",
+            "map_width": 3,
+            "map_height": 1,
+            "seeds_count": 1,
+            "initial_states": [
+                {
+                    "grid": [[0, 5, 1]],
+                    "settlements": [{"x": 2, "y": 0, "has_port": False, "alive": True}],
+                },
+            ],
+        }
         responses.get(f"{BASE_URL}/rounds/abc-123", json=payload, status=200)
 
         result = client.get_round(round_id="abc-123")
 
-        assert result == payload
+        assert result.id == "abc-123"
+        assert result.round_number == 1
+        assert result.status == "active"
+        assert result.map_width == 3
+        assert result.map_height == 1
+        assert result.seeds_count == 1
+        assert len(result.seeds) == 1
+        assert result.seeds[0].grid.shape == (1, 3)
+        assert result.seeds[0].settlements[0].x == 2
 
     @responses.activate
     def test_raises_on_404(self, client: AstarIslandClient) -> None:
@@ -57,12 +77,21 @@ class TestGetRound:
 class TestGetBudget:
     @responses.activate
     def test_returns_budget(self, client: AstarIslandClient) -> None:
-        payload = {"remaining": 42}
+        payload = {
+            "round_id": "abc-123",
+            "queries_used": 8,
+            "queries_max": 50,
+            "active": True,
+        }
         responses.get(f"{BASE_URL}/budget", json=payload, status=200)
 
         result = client.get_budget()
 
-        assert result == payload
+        assert result.round_id == "abc-123"
+        assert result.queries_used == 8
+        assert result.queries_max == 50
+        assert result.active is True
+        assert result.queries_remaining == 42
 
 
 class TestSimulate:
@@ -104,7 +133,7 @@ class TestSubmit:
         payload = {"score": 85.5}
         responses.post(f"{BASE_URL}/submit", json=payload, status=200)
 
-        predictions = np.ones((MAP_SIZE, MAP_SIZE, NUM_CLASSES)) / NUM_CLASSES
+        predictions = np.ones((40, 40, N_CLASSES)) / N_CLASSES
         result = client.submit(round_id="abc-123", predictions=predictions)
 
         assert result == payload
@@ -113,19 +142,25 @@ class TestSubmit:
     def test_sends_correct_body(self, client: AstarIslandClient) -> None:
         responses.post(f"{BASE_URL}/submit", json={}, status=200)
 
-        predictions = np.ones((MAP_SIZE, MAP_SIZE, NUM_CLASSES)) / NUM_CLASSES
+        predictions = np.ones((40, 40, N_CLASSES)) / N_CLASSES
         client.submit(round_id="abc-123", predictions=predictions)
 
         request_body = responses.calls[0].request.body
         assert request_body is not None
         body = json.loads(request_body)
         assert body["round_id"] == "abc-123"
-        assert len(body["predictions"]) == MAP_SIZE
-        assert len(body["predictions"][0]) == MAP_SIZE
-        assert len(body["predictions"][0][0]) == NUM_CLASSES
+        assert len(body["predictions"]) == 40
+        assert len(body["predictions"][0]) == 40
+        assert len(body["predictions"][0][0]) == N_CLASSES
 
-    def test_rejects_wrong_shape(self, client: AstarIslandClient) -> None:
-        bad_predictions = np.ones((10, 10, 6))
+    def test_rejects_wrong_ndim(self, client: AstarIslandClient) -> None:
+        bad_predictions = np.ones((40, 40))  # 2D instead of 3D
+
+        with pytest.raises(AssertionError):
+            client.submit(round_id="abc-123", predictions=bad_predictions)
+
+    def test_rejects_wrong_classes(self, client: AstarIslandClient) -> None:
+        bad_predictions = np.ones((40, 40, 3))  # 3 classes instead of 6
 
         with pytest.raises(AssertionError):
             client.submit(round_id="abc-123", predictions=bad_predictions)
@@ -156,12 +191,27 @@ class TestGetMyPredictions:
 class TestGetAnalysis:
     @responses.activate
     def test_returns_analysis(self, client: AstarIslandClient) -> None:
-        payload = {"ground_truth": [[0] * 40] * 40, "score": 90.0}
+        gt = [[[0.1] * 6] * 3] * 2  # (2, 3, 6)
+        pred = [[[0.2] * 6] * 3] * 2
+        payload = {
+            "prediction": pred,
+            "ground_truth": gt,
+            "score": 90.0,
+            "width": 3,
+            "height": 2,
+            "initial_grid": [[10, 11, 5], [1, 4, 2]],
+        }
         responses.get(f"{BASE_URL}/analysis/abc-123/0", json=payload, status=200)
 
         result = client.get_analysis(round_id="abc-123", seed_index=0)
 
-        assert result == payload
+        assert result.score == 90.0
+        assert result.width == 3
+        assert result.height == 2
+        assert result.ground_truth.shape == (2, 3, 6)
+        assert result.prediction.shape == (2, 3, 6)
+        assert result.initial_grid is not None
+        assert result.initial_grid.shape == (2, 3)
 
 
 class TestGetLeaderboard:

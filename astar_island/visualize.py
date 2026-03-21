@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -19,19 +20,21 @@ from matplotlib.colors import LinearSegmentedColormap
 from numpy.typing import NDArray
 
 from astar_island.fetch_data import load_round
-from astar_island.predict import find_coastal_cells
+from astar_island.model import find_coastal_cells
+
+LOGGER = logging.getLogger(__name__)
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 
 # Colors matched to the official app.ainm.no visualization
 TERRAIN_COLORS = {
-    "water": "#145a96",       # Darker blue (ocean)
-    "plains": "#d4b96a",      # Tan/sand
+    "water": "#145a96",  # Darker blue (ocean)
+    "plains": "#d4b96a",  # Tan/sand
     "settlement": "#f08c00",  # Vibrant orange
-    "port": "#30b5c7",        # Cyan
-    "ruin": "#8b1a1a",        # Dark red/maroon
-    "forest": "#2d7a2d",      # Dark green
-    "mountain": "#7a7f8a",    # Slate gray
+    "port": "#30b5c7",  # Cyan
+    "ruin": "#8b1a1a",  # Dark red/maroon
+    "forest": "#2d7a2d",  # Dark green
+    "mountain": "#7a7f8a",  # Slate gray
 }
 
 # Full board colormap: class indices 0-5 map to [empty, settlement, port, ruin, forest, mountain]
@@ -139,7 +142,7 @@ def plot_mask_grid(
         plot_mask(mask, color, title, ax)
         ax.set_title(title, fontsize=12, fontweight="bold", color="white")
 
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # ty: ignore[invalid-argument-type]
     return fig
 
 
@@ -147,11 +150,7 @@ def plot_heatmap_grid(
     probs: NDArray[np.float64],
     suptitle: str = "Probability Channels",
 ) -> plt.Figure:
-    """Plot a 2x3 grid of per-class probability heatmaps.
-
-    Args:
-        probs: (40, 40, 6) probability array.
-    """
+    """Plot a 2x3 grid of per-class probability heatmaps."""
     fig, axes = plt.subplots(2, 3, figsize=(14, 10), facecolor="#1e1e1e")
     fig.suptitle(suptitle, fontsize=16, fontweight="bold", color="white")
 
@@ -164,7 +163,7 @@ def plot_heatmap_grid(
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cbar.ax.tick_params(colors="white", labelsize=8)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # ty: ignore[invalid-argument-type]
     return fig
 
 
@@ -172,11 +171,7 @@ def plot_heatmap_combined(
     probs: NDArray[np.float64],
     title: str = "Combined Probability Map",
 ) -> plt.Figure:
-    """Plot a combined map where each cell's color is the weighted blend of all 6 channels.
-
-    Args:
-        probs: (40, 40, 6) probability array.
-    """
+    """Plot a combined map where each cell's color is the weighted blend of all 6 channels."""
     h, w, _ = probs.shape
     rgb = np.zeros((h, w, 3), dtype=np.float64)
 
@@ -234,8 +229,8 @@ def visualize_round(round_number: int, seed_index: int) -> None:
     fig.savefig(masks_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
 
-    print(f"Saved: {board_path}")
-    print(f"Saved: {masks_path}")
+    LOGGER.info("Saved: %s", board_path)
+    LOGGER.info("Saved: %s", masks_path)
 
     # Ground truth heatmaps (if available)
     if "ground_truth" in data and not np.isnan(data["ground_truth"]).all():
@@ -248,7 +243,7 @@ def visualize_round(round_number: int, seed_index: int) -> None:
         gt_channels_path = PLOTS_DIR / f"{prefix}_gt_channels.png"
         fig.savefig(gt_channels_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
-        print(f"Saved: {gt_channels_path}")
+        LOGGER.info("Saved: %s", gt_channels_path)
 
         fig = plot_heatmap_combined(
             gt,
@@ -257,9 +252,9 @@ def visualize_round(round_number: int, seed_index: int) -> None:
         gt_combined_path = PLOTS_DIR / f"{prefix}_gt_combined.png"
         fig.savefig(gt_combined_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
-        print(f"Saved: {gt_combined_path}")
+        LOGGER.info("Saved: %s", gt_combined_path)
     else:
-        print("No ground truth available for this round")
+        LOGGER.warning("No ground truth available for round %d", round_number)
 
 
 def main() -> None:
