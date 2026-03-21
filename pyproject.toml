@@ -3,12 +3,14 @@ name = "nm-ai"
 version = "0.1.0"
 description = "Norwegian championship in AI"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = "==3.13.*"
 
 dependencies = [
     "anthropic>=0.86.0",
+    "dotenv>=0.9.9",
     "fastapi>=0.135.1",
     "httpx>=0.28.1",
+    "numpy>=2.4.3",
     "pydantic>=2.12.5",
     "requests>=2.32.5",
     "uvicorn>=0.42.0",
@@ -41,6 +43,8 @@ line-length = 100
 # operate a blacklist, rather than a whitelist.
 select = ["ALL"]
 ignore = [
+    "PT011",    # pytest.raises need match statements
+
     # Rules that are intentionally disabled because we don't want them
     "TD003",    # missing-todo-link: Requiring issue tracker links for TODOs would be a lot of work
     "TRY203",   # raise-without-from-inside-except: Used to inform docstring about raises

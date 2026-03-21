@@ -6,13 +6,20 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 
+EXPERIMENTS_DIRNAME = "experiments"
+LEGACY_OUTPUT_DIRNAME = "output"
+
 
 def get_package_root() -> Path:
     return Path(__file__).resolve().parent
 
 
 def get_run_root() -> Path:
-    return get_package_root() / "output"
+    return get_package_root() / EXPERIMENTS_DIRNAME
+
+
+def get_legacy_run_root() -> Path:
+    return get_package_root() / LEGACY_OUTPUT_DIRNAME
 
 
 def create_run_dir(method: str) -> Path:
@@ -42,11 +49,12 @@ def copy_predictions(predictions_path: Path, dest_dir: Path) -> Path:
 
 
 def resolve_run_dir_from_predictions(predictions_path: Path) -> Path | None:
-    run_root = get_run_root()
-    try:
-        rel = predictions_path.resolve().relative_to(run_root)
-    except ValueError:
-        return None
-    if not rel.parts:
-        return None
-    return run_root / rel.parts[0]
+    for run_root in (get_run_root(), get_legacy_run_root()):
+        try:
+            rel = predictions_path.resolve().relative_to(run_root)
+        except ValueError:
+            continue
+        if not rel.parts:
+            continue
+        return run_root / rel.parts[0]
+    return None

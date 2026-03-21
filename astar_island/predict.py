@@ -1,13 +1,10 @@
 """Astar Island prediction pipeline.
 
-Strategy:
-1. Fetch round data and initial map states
-2. Use query budget strategically to observe key areas
-3. Build a model of terrain dynamics
-4. Predict final terrain probability distributions
+Orchestrates the prediction workflow: initialize model from round data,
+optionally query viewports, and submit predictions.
 
 Usage:
-    python -m astar_island.predict --token YOUR_TOKEN --round-id 1
+    uv run python -m astar_island.predict --round-id ROUND_ID
 """
 
 import argparse
@@ -16,113 +13,78 @@ import logging
 import numpy as np
 from numpy.typing import NDArray
 
-from astar_island.client import MAP_SIZE
-from astar_island.client import NUM_CLASSES
 from astar_island.client import AstarIslandClient
+from astar_island.model import IslandModel
+from astar_island.model import IslandPredictor
 
 LOGGER = logging.getLogger(__name__)
 
 
-def create_uniform_prior() -> NDArray[np.float64]:
-    """Create a uniform probability distribution as baseline prediction."""
-    predictions = np.ones((MAP_SIZE, MAP_SIZE, NUM_CLASSES)) / NUM_CLASSES
+def run_prediction_pipeline(
+    client: AstarIslandClient,
+    round_id: str,
+    predictor: IslandPredictor,
+    submit: bool = False,
+) -> dict[int, NDArray[np.float64]]:
+    """Full prediction pipeline for a round.
+
+    Args:
+        client: API client.
+        round_id: Round UUID.
+        predictor: Predictor class for creating the IslandModel.
+        submit: Whether to submit predictions to the API.
+
+    Returns:
+        Dict mapping seed_index to (H, W, 6) prediction arrays.
+    """
+    round_data = client.get_round(round_id)
+    budget_data = client.get_budget()
+
+    LOGGER.info(
+        "Round %d (%s): %dx%d map, %d seeds, status=%s, budget=%s",
+        round_data.round_number,
+        round_data.id[:8],
+        round_data.map_height,
+        round_data.map_width,
+        round_data.seeds_count,
+        round_data.status,
+        budget_data,
+    )
+
+    # Initialize model with all seeds
+    model = IslandModel.from_round_data(round_data=round_data, predictor=predictor)
+    LOGGER.info("Model initialized with %d seeds", round_data.seeds_count)
+
+    # TODO(martin): Update logic
+    # Generate predictions
+    predictions: dict[int, NDArray[np.float64]] = {}
+    for seed_idx in range(round_data.seeds_count):
+        predictions[seed_idx] = model.predict(seed_idx)
+
+    # Submit predictions for each seed
+    if submit:
+        raise NotImplementedError("This should not be done - yet")
+        for seed_idx, preds in predictions.items():
+            result = client.submit(round_id=round_id, predictions=preds)
+            LOGGER.info("Seed %d submission: %s", seed_idx, result)
+
     return predictions
-
-
-def ensure_min_probability(
-    predictions: NDArray[np.float64],
-    min_prob: float = 0.01,
-) -> NDArray[np.float64]:
-    """Ensure no probability is exactly 0.0 (critical for KL divergence scoring).
-
-    Clips all values to at least min_prob, then renormalizes each cell to sum to 1.0.
-    """
-    predictions = np.clip(predictions, min_prob, None)
-    # Renormalize each cell
-    sums = predictions.sum(axis=-1, keepdims=True)
-    predictions = predictions / sums
-    return predictions
-
-
-def incorporate_initial_map(
-    predictions: NDArray[np.float64],
-    initial_map: list[list[int]],
-) -> NDArray[np.float64]:
-    """Update predictions based on initial map state.
-
-    Static terrains (ocean=0, mountain=5) can be predicted with high confidence.
-
-    TODO: Parse the initial map format from the API and update predictions.
-    """
-    raise NotImplementedError("Implement initial map incorporation")
-
-
-def plan_queries(
-    round_data: dict,
-    budget_remaining: int,
-) -> list[dict]:
-    """Decide which viewports to query for maximum information gain.
-
-    Strategy ideas:
-    - Cover as much area as possible with non-overlapping viewports
-    - Focus on dynamic areas (settlements, ports) over static (ocean, mountain)
-    - Spread queries across seeds for better statistics
-
-    TODO: Implement query planning strategy.
-    """
-    raise NotImplementedError("Implement query planning strategy")
-
-
-def update_predictions_from_observations(
-    predictions: NDArray[np.float64],
-    observations: list[dict],
-) -> NDArray[np.float64]:
-    """Refine predictions based on observed simulation states.
-
-    TODO: Implement prediction update logic based on viewport observations.
-    """
-    raise NotImplementedError("Implement prediction updates from observations")
-
-
-def run_prediction_pipeline(client: AstarIslandClient, round_id: int) -> None:
-    """Full prediction pipeline for a round."""
-    # 1. Get round info
-    _round_data = client.get_round(round_id)
-    budget = client.get_budget()
-    LOGGER.info("Round %d: budget remaining = %d", round_id, budget)
-
-    # 2. Start with uniform prior
-    predictions = create_uniform_prior()
-
-    # 3. Incorporate initial map state
-    # predictions = incorporate_initial_map(predictions, round_data["initial_maps"])
-
-    # 4. Plan and execute queries
-    # queries = plan_queries(round_data, budget["remaining"])
-    # observations = []
-    # for q in queries:
-    #     obs = client.simulate(round_id=round_id, **q)
-    #     observations.append(obs)
-
-    # 5. Update predictions from observations
-    # predictions = update_predictions_from_observations(predictions, observations)
-
-    # 6. Ensure valid probabilities
-    predictions = ensure_min_probability(predictions)
-
-    # 7. Submit
-    result = client.submit(round_id=round_id, predictions=predictions)
-    LOGGER.info("Submission result: %s", result)
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+
     parser = argparse.ArgumentParser(description="Astar Island prediction pipeline")
-    parser.add_argument("--token", required=True, help="JWT auth token")
-    parser.add_argument("--round-id", type=int, required=True, help="Round ID")
+    parser.add_argument("--round-id", required=True, help="Round ID (UUID string)")
+    parser.add_argument("--submit", action="store_true", help="Submit predictions")
     args = parser.parse_args()
 
-    client = AstarIslandClient(token=args.token)
-    run_prediction_pipeline(client, args.round_id)
+    from astar_island.config import get_access_token  # noqa: PLC0415
+    from astar_island.predictor import DiffusionPredictor  # noqa: PLC0415
+
+    client = AstarIslandClient(token=get_access_token())
+    predictor = DiffusionPredictor()
+    run_prediction_pipeline(client, args.round_id, predictor=predictor, submit=args.submit)
 
 
 if __name__ == "__main__":

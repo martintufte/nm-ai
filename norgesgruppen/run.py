@@ -12,12 +12,16 @@ IMPORTANT sandbox constraints:
 """
 
 import argparse
+import inspect
 import json
 import logging
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
 from ultralytics import YOLO
+from ultralytics.nn import modules as ultralytics_modules
+from ultralytics.nn import tasks as ultralytics_tasks
 
 from norgesgruppen.evaluate import evaluate
 from norgesgruppen.run_utils import copy_predictions
@@ -31,6 +35,20 @@ CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 IMG_SIZE = 1280
 MAX_DETECTIONS = 300
+
+
+def allowlist_ultralytics_checkpoint_classes() -> None:
+    """Allow trusted Ultralytics checkpoint classes for PyTorch 2.6+ loading."""
+    add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
+    if add_safe_globals is None:
+        return
+
+    safe_classes = []
+    for module in (ultralytics_tasks, ultralytics_modules, torch.nn):
+        safe_classes.extend([member for _, member in inspect.getmembers(module, inspect.isclass)])
+
+    safe_classes.append(OrderedDict)
+    add_safe_globals(safe_classes)
 
 
 def infer_annotations_path(images_dir: Path) -> Path | None:
@@ -54,6 +72,7 @@ def finalize_local_run(
 
 def load_model(weights_dir: Path) -> YOLO:
     """Load YOLOv8 model from weights in the submission directory."""
+    allowlist_ultralytics_checkpoint_classes()
     # Try different weight formats in priority order
     for name in ["best.pt", "model.pt", "best.onnx", "model.onnx"]:
         weights_path = weights_dir / name
