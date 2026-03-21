@@ -113,7 +113,9 @@ ProjectOrderLine writable fields: `product`, `description`, `count`, `unitCostCu
 Query params: `projectId` **(required)**
 
 ### POST /project/subcontract
-ProjectSubContract writable fields: `project`, `company`, `budgetFeeCurrency`, `budgetExpensesCurrency`, `budgetIncomeCurrency`, `budgetNetAmountCurrency`, `name`, `description`
+**Note:** `displayName` is secretly required (422 if omitted). `name` alone is not enough.
+
+ProjectSubContract writable fields: `project`, `company`, `displayName` **(required)**, `budgetFeeCurrency`, `budgetExpensesCurrency`, `budgetIncomeCurrency`, `budgetNetAmountCurrency`, `name`, `description`
 
 ### GET /project/task
 Query params: `projectId` **(required)**

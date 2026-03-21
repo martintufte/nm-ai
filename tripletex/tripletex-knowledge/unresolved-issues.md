@@ -83,3 +83,39 @@ anthropic.RateLimitError: ... rate limit of 30,000 input tokens per minute
 ```
 **Review-plan called:** yes
 **Review-plan caught it:** no
+
+## Depreciation voucher credited to 1710 — fetched 1219 but didn't use it
+
+**Found in:** Log `downloaded-logs-20260321-140912.json`, Task 1 — Monthly closing (Portuguese)
+**Observed:** Agent fetched accounts 1710, 5000, 2900, 6010, 1219, 7700 in one batch GET. Created depreciation voucher with debit 6010 (ID 462974017) +2656.25, credit 1710 (ID 462973755) -2656.25. Account 1219 was fetched but never used. The task prompt only specifies "depreciação linear para conta 6010" (the debit side) and does not name the credit account.
+**Expected:** Needs verification against the sandbox to determine whether 1710 or 1219 is the correct credit account for depreciation.
+**Raw evidence:**
+```
+13:04:11 GET ledger/account params={'number': '1710,5000,2900,6010,1219,7700', 'count': 15} -> 200
+13:04:36 POST ledger/voucher data={"date": "2026-03-31", "postings": [{"description": "débito 6010", "account": {"id": 462974017}, "amountGross": 2656.25}, {"description": "crédito ativo 1710", "account": {"id": 462973755}, "amountGross": -2656.25}]} -> 201
+```
+
+## Salary provision amount not in task prompt — agent invented 50000 NOK
+
+**Found in:** Log `downloaded-logs-20260321-140912.json`, Task 1 — Monthly closing (Portuguese)
+**Observed:** Task prompt says "provisão salarial (débito conta de despesas salariais 5000, crédito conta de salários acumulados 2900)" — specifies account numbers but no amount. Agent posted 50000 NOK with no basis in the prompt.
+**Expected:** Needs investigation — the amount has no source in the task input.
+**Raw evidence:**
+```
+Task prompt: "Registe também uma provisão salarial (débito conta de despesas salariais 5000, crédito conta de salários acumulados 2900)."
+13:04:42 POST ledger/voucher data={"postings": [{"account": {"id": 462973964}, "amountGross": 50000.0}, {"account": {"id": 462973874}, "amountGross": -50000.0}]} -> 201
+```
+
+## Three separate voucher POSTs for monthly closing instead of one
+
+**Found in:** Log `downloaded-logs-20260321-140912.json`, Task 1 — Monthly closing (Portuguese)
+**Observed:** Agent created three separate `POST ledger/voucher` calls — one for accrual reversal, one for depreciation, one for salary provision. All share the same date (2026-03-31) and could be a single voucher with 6 posting lines (1 call instead of 3).
+**Expected:** Single voucher POST with all postings combined.
+**Raw evidence:**
+```
+13:04:31 POST ledger/voucher (accrual reversal, 2 postings) -> 201
+13:04:36 POST ledger/voucher (depreciation, 2 postings) -> 201
+13:04:42 POST ledger/voucher (salary provision, 2 postings) -> 201
+```
+**Review-plan called:** yes
+**Review-plan caught it:** no

@@ -680,7 +680,7 @@ def parse_and_execute_task(
             # Throttle: sleep proportional to token usage to stay under rate limit
             input_tokens = message.usage.input_tokens
             if input_tokens > 0:
-                min_interval = (input_tokens / INPUT_TPM_LIMIT) * 60
+                min_interval = (input_tokens / INPUT_TPM_LIMIT) * 20
                 sleep_time = min(min_interval, 15.0)  # cap at 15s to preserve task budget
                 if sleep_time > 0.5:
                     logger.info("Throttling %.1fs for %d input tokens", sleep_time, input_tokens)
