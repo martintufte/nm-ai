@@ -20,8 +20,10 @@ import argparse
 import json
 import os
 import random
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -162,8 +164,24 @@ def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
     print(_truncate(json.dumps(resp.json())))
 
 
+def _validate_post(path: str, data: dict) -> str | None:
+    """Return an error message if the POST payload has a known issue, else None."""
+    if path == "invoice" and "orders" in data:
+        for i, order in enumerate(data["orders"]):
+            if isinstance(order, dict) and "deliveryDate" not in order:
+                return (
+                    f"orders[{i}] is missing 'deliveryDate' (hidden required field). "
+                    "Set it to the same value as orderDate if no specific delivery date."
+                )
+    return None
+
+
 def cmd_post(client: httpx.Client, endpoint: str, data: dict) -> None:
     path = _normalize_endpoint(endpoint)
+    validation_error = _validate_post(path, data)
+    if validation_error:
+        print(json.dumps({"error": validation_error}))
+        return
     try:
         resp = _retry_request(client.post, path, json=data)
     except httpx.HTTPStatusError as e:
@@ -176,17 +194,17 @@ def cmd_post(client: httpx.Client, endpoint: str, data: dict) -> None:
     print(_truncate(json.dumps(resp.json())))
 
 
-def cmd_put(client: httpx.Client, endpoint: str, data: dict) -> None:
+def cmd_put(client: httpx.Client, endpoint: str, data: dict, params: dict | None = None) -> None:
     path = _normalize_endpoint(endpoint)
     try:
-        resp = _retry_request(client.put, path, json=data)
+        resp = _retry_request(client.put, path, params=params, json=data)
     except httpx.HTTPStatusError as e:
-        _log_call("PUT", path, e.response.status_code, data=data)
+        _log_call("PUT", path, e.response.status_code, params=params, data=data)
         print(
             json.dumps({"error": f"HTTP {e.response.status_code}", "body": e.response.text[:2000]}),
         )
         return
-    _log_call("PUT", path, resp.status_code, data=data)
+    _log_call("PUT", path, resp.status_code, params=params, data=data)
     print(_truncate(json.dumps(resp.json())))
 
 
@@ -213,11 +231,29 @@ def cmd_read_skill(skill_name: str) -> None:
     print(_AVAILABLE_SKILLS[skill_name].read_text())
 
 
-def cmd_review_plan(plan: str) -> None:
+_VALID_DOMAINS = {"invoice", "ledger", "employee", "travel", "project"}
+
+
+def cmd_review_plan(plan: str, domains: list[str] | None) -> None:
     """Review plan using claude CLI (no API key needed)."""
-    optimality_skills = "\n\n".join(
-        p.read_text() for p in sorted(_SKILLS_DIR.glob("_optimality*.md"))
-    )
+    if not domains:
+        valid = ", ".join(sorted(_VALID_DOMAINS))
+        print(json.dumps({"error": f"--domains is required. Pass one or more of: {valid}"}))
+        return
+    invalid = [d for d in domains if d not in _VALID_DOMAINS]
+    if invalid:
+        valid = ", ".join(sorted(_VALID_DOMAINS))
+        print(json.dumps({"error": f"Invalid domain(s): {', '.join(invalid)}. Valid: {valid}"}))
+        return
+
+    optimality_dir = _SKILLS_DIR / "optimality"
+    parts = [(optimality_dir / "_optimality_agent.md").read_text()]
+    for d in domains:
+        f = optimality_dir / f"_optimality_{d}.md"
+        if f.exists():
+            parts.append(f.read_text())
+    optimality_skills = "\n\n".join(parts)
+
     system_prompt = f"""\
 You are an API call plan reviewer. You receive a plan listing intended \
 Tripletex API calls and you critique it for efficiency.
@@ -230,39 +266,73 @@ Parallelization and latency are irrelevant — only the total count matters.
 1. Check the plan against each technique above.
 2. Flag any call that can be eliminated (merged, inlined, or removed entirely). \
 For each flagged call, explain which technique applies and what the replacement is.
-3. If calls can be reduced, show the revised sequence with the new total count.
+3. If calls can be reduced, show the revised sequence.
 4. If the plan is already at minimum call count, say "Plan is optimal" and stop.
 
 Do NOT suggest parallelization — it doesn't reduce call count. \
 Do NOT suggest speculative alternatives you aren't sure work."""
 
-    env = {**os.environ}
-    env.pop("CLAUDECODE", None)
+    # Strip ALL CLAUDE* env vars to avoid nested-CLI detection issues
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
 
-    result = subprocess.run(
-        [
-            "claude",
-            "-p",
-            plan,
-            "--system-prompt",
-            system_prompt,
-            "--no-session-persistence",
-            "--model",
-            "sonnet",
-            "--dangerously-skip-permissions",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+    timeout_s = 60
+
+    # Write output to temp file via shell redirect — claude CLI suppresses
+    # stdout when it detects a Python pipe in nested invocations.
+    outfile = tempfile.mktemp(suffix=".json")
+    cmd = (
+        f"claude -p {shlex.quote(plan)}"
+        f" --system-prompt {shlex.quote(system_prompt)}"
+        f" --no-session-persistence --model sonnet"
+        f" --dangerously-skip-permissions --output-format json"
+        f" > {shlex.quote(outfile)} 2>/dev/null"
     )
 
-    _log_call("REVIEW_PLAN", "", 200)
-    if result.returncode != 0:
-        print(json.dumps({"error": f"Review failed: {result.stderr[:500]}"}))
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, shell=True, env=env)
+
+    # Poll with timeout
+    timed_out = False
+    while proc.poll() is None:
+        if time.monotonic() - t0 > timeout_s:
+            proc.kill()
+            proc.wait()
+            timed_out = True
+            break
+        time.sleep(0.5)
+
+    elapsed = time.monotonic() - t0
+
+    # Read result from temp file
+    result_text = ""
+    try:
+        with open(outfile) as f:
+            raw = f.read().strip()
+        if raw:
+            try:
+                msg = json.loads(raw)
+                result_text = msg.get("result", raw)
+                if msg.get("is_error"):
+                    print(f"[review-plan] claude reported error: {result_text[:300]}", file=sys.stderr)
+            except json.JSONDecodeError:
+                # Plain text output
+                result_text = raw
+    except FileNotFoundError:
+        print("[review-plan] output file not created", file=sys.stderr)
+    finally:
+        try:
+            os.unlink(outfile)
+        except OSError:
+            pass
+
+    _log_call("REVIEW_PLAN", "", 200 if result_text else 408)
+
+    if result_text:
+        print(result_text)
+    elif timed_out:
+        print(json.dumps({"error": f"Review timed out after {elapsed:.1f}s"}))
     else:
-        print(result.stdout)
+        print(json.dumps({"error": f"Review produced no result (exit {proc.returncode}, {elapsed:.1f}s)"}))
 
 
 def main() -> None:
@@ -279,6 +349,7 @@ def main() -> None:
 
     p_put = sub.add_parser("put")
     p_put.add_argument("endpoint")
+    p_put.add_argument("--params", type=json.loads, default=None)
     p_put.add_argument("--data", type=json.loads, required=True)
 
     p_delete = sub.add_parser("delete")
@@ -289,6 +360,8 @@ def main() -> None:
 
     p_review = sub.add_parser("review-plan")
     p_review.add_argument("plan", help="Your intended API calls as text")
+    p_review.add_argument("--domains", nargs="+",
+                          help="Domains involved in the task")
 
     args = parser.parse_args()
 
@@ -296,7 +369,7 @@ def main() -> None:
         cmd_read_skill(args.skill_name)
         return
     if args.command == "review-plan":
-        cmd_review_plan(args.plan)
+        cmd_review_plan(args.plan, args.domains)
         return
 
     client = _get_client()
@@ -305,7 +378,7 @@ def main() -> None:
     elif args.command == "post":
         cmd_post(client, args.endpoint, args.data)
     elif args.command == "put":
-        cmd_put(client, args.endpoint, args.data)
+        cmd_put(client, args.endpoint, args.data, args.params)
     elif args.command == "delete":
         cmd_delete(client, args.endpoint)
 

@@ -67,6 +67,24 @@ Common unnecessary calls to flag:
 - `GET /department` — only needed when **creating** employees (hidden required field). If the task only looks up existing employees, skip it.
 - `GET /token/session/>whoAmI` — only needed when you need the admin employee ID (e.g. as projectManager). If the task doesn't require the current user's identity, skip it.
 
+## Technique 7: Always filter by name when you know it
+
+When the task gives you an entity name, use the name filter directly. Never fetch all entities and scan.
+
+Bad (3 calls):
+```
+GET /department?count=20         → scan page 1
+GET /department?from=20&count=5  → scan page 2
+GET /department?name=X&count=5   → finally filter
+```
+
+Good (1 call):
+```
+GET /department?name=X&count=5   → direct lookup
+```
+
+This applies to all entity lookups: `customerName=`, `name=`, `firstName=`/`lastName=`, `email=`, etc.
+
 ## Domain-specific optimality skills
 
 Each domain has its own optimality patterns with inline capabilities and common pitfalls:

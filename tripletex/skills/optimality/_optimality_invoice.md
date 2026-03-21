@@ -26,16 +26,19 @@ POST /invoice {
 
 Multiple order lines go in the same `orderLines` array. Multiple orders (rare) go in the `orders` array.
 
-## Payment + credit note: query params (not body)
+## Payment + credit note: use params dict (not body)
 
-Both use PUT with query parameters. Sending JSON body → 422.
+Both use PUT with `params` dict. Sending JSON body → 422.
 
 ```
-PUT /invoice/{id}/:payment?paymentDate=YYYY-MM-DD&paymentTypeId=X&paidAmount=1000
-PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD&comment=reason
-```
+PUT /invoice/{id}/:payment
+params: {"paymentDate": "YYYY-MM-DD", "paymentTypeId": X, "paidAmount": 1000}
+data: {}
 
-Send empty body `{}` with these calls.
+PUT /invoice/{id}/:createCreditNote
+params: {"date": "YYYY-MM-DD", "comment": "reason"}
+data: {}
+```
 
 ## Payment type lookup: 1 call (unavoidable)
 

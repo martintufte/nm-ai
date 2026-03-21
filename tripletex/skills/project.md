@@ -104,6 +104,8 @@ Query params: `projectId` **(required)**, `isBudget`
 ### POST /project/orderline
 ProjectOrderLine writable fields: `product`, `description`, `count`, `unitCostCurrency`, `unitPriceExcludingVatCurrency`, `currency`, `markup`, `discount`, `vatType`, `project`, `date`, `isChargeable`
 
+**Important:** Setting `unitPriceExcludingVatCurrency` (selling price) requires `isChargeable: true`. Without it Tripletex returns 422: `"Ordrelinjen er ikke fakturerbar."` Always set both together when the order line has a selling price. On internal projects (`isInternal: true`), `unitPriceExcludingVatCurrency` cannot be set at all — use `unitCostCurrency` only.
+
 ### POST /project/orderline/list
 ### DELETE /project/orderline/{id}
 ### GET /project/orderline/{id}

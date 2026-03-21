@@ -40,6 +40,10 @@ curl -s -w "\nHTTP_CODE:%{http_code}\n" -u "0:$TRIPLETEX_SANDBOX_TOKEN" \
   -o /tmp/tt.json && python3 -m json.tool /tmp/tt.json
 ```
 
+### Tips
+
+- Use `?fields=*` to see all available fields on an entity.
+
 ### Inline scripts
 
 Write throwaway Python/bash inline for multi-step sequences, conditional logic, parsing responses. No need for a formal script.

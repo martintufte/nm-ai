@@ -76,11 +76,31 @@ POST /ledger/voucher
 ```
 
 **Posting gotchas:**
-- Use `amountGross` + `amountGrossCurrency` (NOT `amount` — that stores net/ex-VAT and may zero out)
+- Use `amountGross` + `amountGrossCurrency` (NOT `amount` — that stores net/ex-VAT and may zero out). `amountGross` is always the VAT-inclusive amount — e.g. for a 10000 net purchase with 25% VAT, set `amountGross=12500`
 - Set `row` to 1, 2, etc. — row 0 is reserved for system-generated postings (auto VAT lines)
 - Include `vatType` on each posting — accounts with `vatLocked=true` require the matching vatType or POST fails
 - Use revenue (3xxx) and expense (6xxx+) accounts — asset accounts (1xxx) may be system-locked
 - The API auto-generates VAT postings (row=0) based on account VAT settings
+- **Supplier accounts (2400 leverandørgjeld, etc.) require `supplier.id`** on the posting. Without it: 422 `"postings.supplier.id": "Leverandør mangler."` Include `"supplier": {"id": SUPPLIER_ID}` on any posting to a supplier liability account.
+
+**Receipt / purchase expense voucher:**
+- Task gives a receipt (PDF) for a purchase (equipment, supplies, etc.) and asks to book it with the correct expense account and VAT.
+- Debit: expense account (6xxx — e.g. 6540 Inventar, 6810 Datakostnad) with `vatType: {id: 1}` (input 25%)
+- Credit: payment account (1920 Bank or similar) with `vatType: {id: 0}`
+- Set `department` on the expense posting if the task specifies one
+- The API auto-generates the VAT posting (2710 Inngående MVA) from the vatType
+
+```json
+POST /ledger/voucher
+{
+  "date": "YYYY-MM-DD",
+  "description": "Item - Store",
+  "postings": [
+    {"date": "YYYY-MM-DD", "account": {"id": EXPENSE_ACCT}, "vatType": {"id": 1}, "amountGross": 4950.0, "amountGrossCurrency": 4950.0, "department": {"id": DEPT_ID}, "row": 1},
+    {"date": "YYYY-MM-DD", "account": {"id": BANK_ACCT}, "vatType": {"id": 0}, "amountGross": -4950.0, "amountGrossCurrency": -4950.0, "row": 2}
+  ]
+}
+```
 
 **Prepaid expense reversal (17xx):**
 - Debit the expense account the prepaid relates to, credit the 17xx account. No default — if the task doesn't specify the debit account, `GET /ledger/posting` on the 17xx account to find the original contra-account.
@@ -90,6 +110,8 @@ POST /ledger/voucher
 - Debit: 5000-series (salary expense, e.g. 5000 "Lønn") — total gross salary
 - Credit: 2920 or 2900-series (salary payable, e.g. 2920 "Påløpt lønn") — negative amount matching debit
 - `vatType`: `{"id": 0}` (no VAT on salary)
+- Include `"employee": {"id": EMPLOYEE_ID}` on each posting to link the payroll entry to the employee
+- Look up the employee first: `GET /employee?firstName=...&count=1`
 - Look up both account IDs in a single call: `GET /ledger/account?number=5000,2920&count=5` — the `number` param accepts comma-separated values. One call instead of two.
 
 ### GET /ledger/voucher
@@ -102,7 +124,7 @@ Query params: `id`, `number`, `numberFrom`, `numberTo`, `typeId`, `dateFrom` **(
 ### DELETE /ledger/voucher/{id}
 
 ### PUT /ledger/voucher/{id}/:reverse
-Reverse a voucher. Query params: `date` **(required)**
+Reverse a voucher. Query params: `date` **(required)** — pass via `params: {"date": "YYYY-MM-DD"}`, not in URL. Creates a new voucher with opposite postings and links back via `reverseVoucher`. Use this for payment reversals — see invoice skill for the full workflow.
 
 ### PUT /ledger/voucher/{id}/:sendToInbox
 ### PUT /ledger/voucher/{id}/:sendToLedger

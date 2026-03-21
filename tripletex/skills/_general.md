@@ -90,7 +90,8 @@ Verified inline fields:
 
 See `_optimality_*` skills for domain-specific inline patterns.
 
-### PUT action endpoints (`:payment`, `:createCreditNote`)
+### PUT action endpoints (`:payment`, `:createCreditNote`, `:reverse`)
+These use `params` dict for query parameters — do not embed `?key=value` in the URL. Send `data: {}` (empty body).
 Returns the entity object. HTTP 200. Credit note returns a **new invoice object** (the credit note itself) with its own ID.
 
 ## Auto-assigned Fields
@@ -104,6 +105,9 @@ Never set these — they're auto-generated:
 **Not auto-assigned** (default to empty string): `employeeNumber`, `departmentNumber`. Set explicitly if needed.
 
 **Tip:** To identify inline-capable fields beyond the verified list, look for non-readOnly properties with `type: array` and `items.$ref` in the OpenAPI spec.
+
+## Encoding
+Norwegian characters (æ, ø, å) work fine in API requests — send as UTF-8. No special handling needed; httpx's `json=` parameter encodes UTF-8 automatically.
 
 ## Lookup Reference Data (cache per session)
 ```

@@ -31,6 +31,7 @@ Parse the task prompt, determine the required Tripletex API operations, and exec
 - Customers and products
 - Invoicing, payments, and credit notes
 - Travel expense reports
+- Receipt/expense vouchers
 - Project management
 - Departments
 - Corrections and deletions

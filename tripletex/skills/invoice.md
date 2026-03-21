@@ -70,20 +70,39 @@ POST /invoice
 ```
 
 ## Register Payment — PUT /invoice/{id}/:payment
-**Uses QUERY PARAMS, not request body!** Sending JSON body → 422.
+**Uses params, not request body!** Sending JSON body → 422.
 ```
-PUT /invoice/{id}/:payment?paymentDate=YYYY-MM-DD&paymentTypeId=PAY_TYPE_ID&paidAmount=1000.0
+PUT /invoice/{id}/:payment
+params: {"paymentDate": "YYYY-MM-DD", "paymentTypeId": PAY_TYPE_ID, "paidAmount": 1000.0}
+data: {}
 ```
-All three query params required. Send empty body.
+All three params required.
 
 Lookup payment types: `GET /invoice/paymentType`
 
 ## Create Credit Note — PUT /invoice/{id}/:createCreditNote
-**Uses QUERY PARAMS, not request body!**
+**Uses params, not request body!**
 ```
-PUT /invoice/{id}/:createCreditNote?date=YYYY-MM-DD&comment=reason
+PUT /invoice/{id}/:createCreditNote
+params: {"date": "YYYY-MM-DD", "comment": "reason"}
+data: {}
 ```
 `date` required. `comment` optional. Returns a new invoice object (the credit note) with its own ID.
+
+## Reverse Payment — PUT /ledger/voucher/{paymentVoucherId}/:reverse
+
+To reverse a payment (e.g. bank returned the payment), reverse the **payment voucher**, not the invoice. Do NOT use `:createCreditNote` — that voids the invoice, which is a different operation.
+
+**How it works:** `PUT /invoice/{id}/:payment` creates a separate voucher (debit 1920 Bank, credit 1500 Kundefordringer). Reversing that voucher restores the invoice's `amountOutstanding`.
+
+**Steps:**
+1. Find the invoice → get its `voucher.id` (the invoice voucher)
+2. `GET /ledger/posting?dateFrom=...&dateTo=...&customerId=X` → find the payment voucher: the posting on account 1500 with negative amount whose `voucher.id` ≠ the invoice voucher ID. The payment voucher description starts with "Betaling: Faktura nummer ..."
+3. `PUT /ledger/voucher/{paymentVoucherId}/:reverse` with `params: {"date": "YYYY-MM-DD"}` (empty body)
+
+Returns the reversal voucher. The invoice `amountOutstanding` is restored automatically.
+
+<!-- Verified in sandbox 2026-03-21: invoice 2147612740, payment voucher 609047567, reversal voucher 609051009. amountOutstanding went 10000→0→10000. -->
 
 ## Delete
 `DELETE /invoice/{id}` → **403 Forbidden**. Invoices cannot be deleted. Use credit note to void instead.

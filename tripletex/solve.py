@@ -126,12 +126,6 @@ This tool is free and does not count toward your efficiency score.
 | Skill | Covers |
 |-------|--------|
 | _general | API patterns: references, responses, versioning, inline creation, error translations, lookups |
-| _optimality_agent | Generic call-minimization techniques + index of domain-specific optimality skills |
-| _optimality_employee | Employee inline patterns (employment + details in 1 call) |
-| _optimality_invoice | Invoice inline patterns (orders + lines in 1 call), payment/credit gotchas |
-| _optimality_travel | Travel inline patterns (all 4 sub-resources in 1 call), passenger supplement |
-| _optimality_project | Project inline patterns (participants + activities in 1 call) |
-| _optimality_ledger | Ledger account lookup optimization, payroll vouchers |
 | customer | Customer CRUD, address nested updates |
 | department | Department CRUD (no dependencies) |
 | employee | Employee + Employment, userType, department req |
@@ -455,12 +449,13 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         return _truncate(json.dumps(resp.json()))
 
     @beta_tool
-    def tripletex_put(endpoint: str, data: dict) -> str:
+    def tripletex_put(endpoint: str, data: dict, params: dict | None = None) -> str:
         """PUT request to the Tripletex API. Returns JSON response.
 
         Args:
             endpoint: API path, e.g. 'employee/123'. Do NOT include /v2/ prefix.
             data: JSON body to send.
+            params: Optional query parameters as key-value pairs.
         """
         path = _normalize_endpoint(endpoint)
 
@@ -470,21 +465,23 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
                 if action in path:
                     bad = fields & data.keys()
                     if bad:
+                        params_hint = ", ".join(f'"{k}": ...' for k in sorted(bad))
                         raise ToolError(
                             f"/{action.lstrip(':')} requires query params, not body. "
-                            f"Move {bad} into the URL: {path}?{'&'.join(f'{k}=...' for k in sorted(bad))} "
+                            f"Move {bad} into params: {{{params_hint}}} "
                             f"and send data={{}}.",
                         )
                     break
 
-        logger.info("PUT %s data=%s", path, json.dumps(data)[:500])
+        logger.info("PUT %s params=%s data=%s", path, params, json.dumps(data)[:500])
         try:
-            resp = _retry_request(client.put, path, json=data)
+            resp = _retry_request(client.put, path, params=params, json=data)
         except httpx.HTTPStatusError as e:
             tracker.record(
                 "PUT",
                 path,
                 e.response.status_code,
+                params=params,
                 data=data,
                 response_text=e.response.text,
             )
@@ -495,7 +492,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
                 e.response.text[:2000],
             )
             raise ToolError(f"HTTP {e.response.status_code}: {e.response.text[:2000]}") from e
-        tracker.record("PUT", path, resp.status_code, data=data)
+        tracker.record("PUT", path, resp.status_code, params=params, data=data)
         return _truncate(json.dumps(resp.json()))
 
     @beta_tool
@@ -538,7 +535,7 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         return _AVAILABLE_SKILLS[skill_name].read_text()
 
     @beta_tool
-    def review_plan(plan: str) -> str:
+    def review_plan(plan: str, domains: list[str]) -> str:
         r"""Review your planned API calls for optimality before executing.
 
         This tool is free — it does not count toward your efficiency score.
@@ -547,10 +544,19 @@ def make_tools(client: httpx.Client, tracker: CallTracker) -> list[BetaFunctionT
         Args:
             plan: Your intended API calls as a numbered list, e.g.
                   "1. GET /customer?customerName=Acme\n2. GET /product?name=Widget\n3. POST /invoice {...}"
+            domains: Pick domain(s) matching the API endpoints in your plan:
+                     employee (/employee, /department, /employment),
+                     invoice (/invoice, /order, /product, /customer),
+                     ledger (/ledger, /voucher, /account, /posting),
+                     project (/project, /activity, /timesheet),
+                     travel (/travelExpense, /mileage, /perDiem, /accommodation).
         """
         from tripletex.review_plan import review_plan as _review  # noqa: PLC0415
 
-        return _review(plan)
+        logger.info("review_plan INPUT (domains=%s):\n%s", domains, plan)
+        result = _review(plan, domains=domains)
+        logger.info("review_plan OUTPUT:\n%s", result)
+        return result
 
     return [read_skill, review_plan, tripletex_get, tripletex_post, tripletex_put, tripletex_delete]
 

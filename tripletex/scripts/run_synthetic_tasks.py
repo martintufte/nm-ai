@@ -419,6 +419,13 @@ def build_tasks() -> list[SyntheticTask]:
         total_salary = 34950 + 15450  # base + bonus = 50400
         today = datetime.now(tz=UTC).date()
         tomorrow = today + timedelta(days=1)
+        # Find the employee ID for later matching
+        emp_resp = client.get(
+            "employee",
+            params={"firstName": emp_first_7, "lastName": emp_last_7, "count": 1},
+        )
+        emp_values = emp_resp.json().get("values", [])
+        expected_emp_id = emp_values[0]["id"] if emp_values else None
         # Find recent vouchers — dateFrom/dateTo required, dateTo is exclusive
         resp = client.get(
             "ledger/voucher",
@@ -429,26 +436,39 @@ def build_tasks() -> list[SyntheticTask]:
             },
         )
         vouchers = resp.json().get("values", [])
-        # Find a voucher that has postings on a salary account (5000-series)
+        # Search newest first (highest ID) to avoid picking up stale vouchers from prior runs
+        vouchers.sort(key=lambda v: v["id"], reverse=True)
+        # Find a voucher with salary postings linked to the expected employee
         target_voucher = None
         target_postings = None
+        fallback_voucher = None
+        fallback_postings = None
         for v in vouchers:
             postings = v.get("postings", [])
             # Postings in listing are stubs — fetch with expanded fields
             if postings and not postings[0].get("account", {}).get("number"):
                 resp2 = client.get(
                     f"ledger/voucher/{v['id']}",
-                    params={"fields": "postings(*,account(*))"},
+                    params={"fields": "postings(*,account(*),employee(*))"},
                 )
                 postings = resp2.json().get("value", {}).get("postings", [])
             for p in postings:
                 acct_num = p.get("account", {}).get("number", 0)
                 if 5000 <= acct_num < 6000 and abs(p.get("amountGross", 0)) > 0:
-                    target_voucher = v
-                    target_postings = postings
+                    emp = p.get("employee")
+                    if emp and emp.get("id") == expected_emp_id:
+                        target_voucher = v
+                        target_postings = postings
+                    elif fallback_voucher is None:
+                        fallback_voucher = v
+                        fallback_postings = postings
                     break
             if target_voucher:
                 break
+        # Use employee-matched voucher if found, otherwise fall back to any salary voucher
+        if not target_voucher:
+            target_voucher = fallback_voucher
+            target_postings = fallback_postings
         if not target_voucher or target_postings is None:
             return [
                 (
@@ -463,6 +483,18 @@ def build_tasks() -> list[SyntheticTask]:
         credit_total = sum(
             p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) < 0
         )
+        # Check employee association on salary posting (5000-series debit)
+        salary_posting = next(
+            (
+                p
+                for p in target_postings
+                if 5000 <= p.get("account", {}).get("number", 0) < 6000
+                and p.get("amountGross", 0) > 0
+            ),
+            None,
+        )
+        posting_emp = salary_posting.get("employee") if salary_posting else None
+        posting_emp_id = posting_emp.get("id") if posting_emp else None
         checks: list[VerifyCheck] = [
             ("voucher_exists", True, f"id={target_voucher['id']}"),
             (
@@ -479,6 +511,11 @@ def build_tasks() -> list[SyntheticTask]:
                 "balanced",
                 debit_total + credit_total == 0,
                 f"debit={debit_total} credit={credit_total}",
+            ),
+            (
+                "employee_linked",
+                posting_emp_id == expected_emp_id,
+                f"expected employee {expected_emp_id}, got {posting_emp_id}",
             ),
         ]
         return checks
@@ -1445,6 +1482,299 @@ def build_tasks() -> list[SyntheticTask]:
         ])
         return checks
 
+    # --- Task 18.1: Receipt Expense as Voucher (German) ---
+    dept_name_18 = f"Markedsføring {uid}"
+    receipt_amount_18 = 4950.0
+    receipt_vat_18 = 990.0  # 25% VAT included in 4950
+    receipt_ex_vat_18 = 3960.0
+
+    def setup_task_18(client: httpx.Client) -> None:
+        resp = client.post("department", json={"name": dept_name_18})
+        resp.raise_for_status()
+        print(f"  [setup] Created department '{dept_name_18}' (id={resp.json()['value']['id']})")
+
+    receipt_pdf_18 = _make_pdf([
+        "Elkjøp Bergen",
+        "Dato: 30.03.2026",
+        "",
+        "Tastatur Logitech MX Keys     4 950,00 NOK",
+        "  herav MVA 25%                  990,00 NOK",
+        "",
+        "Betalt med kort",
+    ])
+
+    def verify_task_18(client: httpx.Client) -> list[VerifyCheck]:
+        checks: list[VerifyCheck] = []
+
+        # Check that NO travel expense was created with this department
+        resp = client.get("department", params={"name": dept_name_18, "count": 5})
+        depts = resp.json().get("values", [])
+        if not depts:
+            return [("department_found", False, f"Department '{dept_name_18}' not found")]
+        dept_id = depts[0]["id"]
+
+        resp = client.get(
+            "travelExpense",
+            params={"departmentId": dept_id, "count": 50},
+        )
+        travel_exps = resp.json().get("values", [])
+        checks.append(
+            (
+                "no_travel_expense",
+                len(travel_exps) == 0,
+                f"Found {len(travel_exps)} travel expenses — keyboard purchase should be a voucher, not travel",
+            )
+        )
+
+        # Check that a voucher was created with a posting to an expense account (6xxx range)
+        # in this department. Receipt date may be in the future, so use a wide range.
+        today = datetime.now(tz=UTC).date()
+        resp = client.get(
+            "ledger/posting",
+            params={
+                "dateFrom": (today - timedelta(days=30)).isoformat(),
+                "dateTo": (today + timedelta(days=60)).isoformat(),
+                "departmentId": dept_id,
+                "count": 100,
+                "fields": "id,account(number,name),amountGross,amountGrossCurrency,voucher(id,description)",
+            },
+        )
+        postings = resp.json().get("values", [])
+        # Look for a debit to a 6xxx expense account
+        expense_postings = [
+            p for p in postings
+            if 6000 <= (p.get("account", {}).get("number") or 0) < 7000
+            and (p.get("amountGross") or 0) > 0
+        ]
+        if not expense_postings:
+            checks.append(
+                ("voucher_expense_posting", False, "No debit posting to 6xxx expense account in department")
+            )
+            return checks
+
+        checks.append(("voucher_expense_posting", True, f"Found {len(expense_postings)} expense posting(s)"))
+
+        # Check amount — the gross amount on the expense posting should relate to receipt total
+        # With 25% VAT, the gross amount could be 4950 (inc VAT) or 3960 (ex VAT) depending on
+        # whether the account is VAT-locked. Either is acceptable as long as it's consistent.
+        best_posting = expense_postings[0]
+        gross = best_posting.get("amountGross", 0)
+        amount_ok = abs(gross - receipt_amount_18) < 1.0 or abs(gross - receipt_ex_vat_18) < 1.0
+        checks.append(
+            (
+                "correct_amount",
+                amount_ok,
+                f"expense posting amountGross={gross}, expected ~{receipt_amount_18} (incl VAT) or ~{receipt_ex_vat_18} (excl VAT)",
+            )
+        )
+
+        return checks
+
+    # --- Task 20.1: Supplier Invoice Voucher (Spanish) ---
+    supplier_name_20 = f"Kontorrekvisita {uid} AS"
+    supplier_invoice_date_20 = "2026-03-21"
+    supplier_invoice_gross_20 = 12500.0  # 10000 net + 2500 VAT (25%)
+    supplier_invoice_net_20 = 10000.0
+
+    def setup_task_20(client: httpx.Client) -> None:
+        resp = client.post("supplier", json={"name": supplier_name_20})
+        resp.raise_for_status()
+        sup_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created supplier '{supplier_name_20}' (id={sup_id})")
+
+    def verify_task_20(client: httpx.Client) -> list[VerifyCheck]:
+        today = datetime.now(tz=UTC).date()
+        tomorrow = today + timedelta(days=1)
+        resp = client.get(
+            "ledger/voucher",
+            params={
+                "dateFrom": supplier_invoice_date_20,
+                "dateTo": tomorrow.isoformat(),
+                "count": 200,
+            },
+        )
+        vouchers = resp.json().get("values", [])
+
+        # Find voucher with a posting to account 2400
+        target = None
+        target_postings: list[dict] = []
+        for v in vouchers:
+            postings = v.get("postings", [])
+            if postings and not postings[0].get("account", {}).get("number"):
+                resp2 = client.get(
+                    f"ledger/voucher/{v['id']}",
+                    params={"fields": "postings(*,account(*),supplier(*))"},
+                )
+                postings = resp2.json().get("value", {}).get("postings", [])
+            acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
+            if 2400 in acct_numbers and 6540 in acct_numbers:
+                target = v
+                target_postings = postings
+                break
+
+        if not target:
+            return [
+                ("voucher_exists", False, f"No voucher with 2400+6540 postings among {len(vouchers)} vouchers"),
+            ]
+
+        checks: list[VerifyCheck] = [
+            ("voucher_exists", True, f"id={target['id']}"),
+        ]
+
+        # Check that 2400 posting has supplier linked
+        posting_2400 = [p for p in target_postings if p.get("account", {}).get("number") == 2400]
+        if posting_2400:
+            sup = posting_2400[0].get("supplier")
+            has_supplier = sup is not None and sup.get("id") is not None
+            checks.append(
+                ("supplier_on_2400", has_supplier, f"supplier={sup}"),
+            )
+        else:
+            checks.append(("supplier_on_2400", False, "No posting to account 2400"))
+
+        # Check amounts are reasonable (gross on 2400, net on 6540)
+        posting_6540 = [p for p in target_postings if p.get("account", {}).get("number") == 6540]
+        if posting_6540:
+            debit_amount = posting_6540[0].get("amountGross", 0)
+            checks.append(
+                (
+                    "expense_amount",
+                    abs(debit_amount - supplier_invoice_gross_20) < 1.0
+                    or abs(debit_amount - supplier_invoice_net_20) < 1.0,
+                    f"amountGross={debit_amount}, expected net={supplier_invoice_net_20} or gross={supplier_invoice_gross_20}",
+                ),
+            )
+
+        # Check balanced (use net amount — amountGross doesn't balance when auto-VAT postings exist)
+        net_total = sum(p.get("amount", 0) for p in target_postings)
+        checks.append(
+            ("balanced", abs(net_total) < 0.01, f"net_total={net_total}"),
+        )
+
+        return checks
+
+    # --- Task 19.1: Reverse Invoice Payment (Norwegian) ---
+    cust_name_19 = f"Snøhetta {uid} AS"
+    invoice_amount_19 = 49600.0
+
+    def setup_task_19(client: httpx.Client) -> None:
+        _ensure_bank_account(client)
+        resp = client.post("customer", json={"name": cust_name_19})
+        resp.raise_for_status()
+        cust_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created customer '{cust_name_19}' (id={cust_id})")
+
+        resp = client.post(
+            "invoice",
+            json={
+                "invoiceDate": "2026-03-15",
+                "invoiceDueDate": "2026-04-15",
+                "customer": {"id": cust_id},
+                "orders": [
+                    {
+                        "orderDate": "2026-03-15",
+                        "deliveryDate": "2026-03-15",
+                        "customer": {"id": cust_id},
+                        "orderLines": [
+                            {
+                                "description": "Systemutvikling",
+                                "count": 1,
+                                "unitPriceExcludingVatCurrency": invoice_amount_19,
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        inv_id = resp.json()["value"]["id"]
+        print(f"  [setup] Created invoice (id={inv_id})")
+
+        # Get payment type
+        resp = client.get("invoice/paymentType", params={"count": 5})
+        resp.raise_for_status()
+        pay_types = resp.json()["values"]
+        pay_type_id = pay_types[0]["id"]
+
+        # Register payment
+        resp = client.put(
+            f"invoice/{inv_id}/:payment",
+            params={
+                "paymentDate": "2026-03-20",
+                "paymentTypeId": pay_type_id,
+                "paidAmount": invoice_amount_19,
+            },
+        )
+        resp.raise_for_status()
+        outstanding = resp.json()["value"]["amountOutstanding"]
+        print(f"  [setup] Registered payment on invoice {inv_id} (outstanding={outstanding})")
+
+    def verify_task_19(client: httpx.Client) -> list[VerifyCheck]:
+        resp = client.get("customer", params={"customerName": cust_name_19, "count": 5})
+        custs = resp.json().get("values", [])
+        if not custs:
+            return [("customer_exists", False, f"No customer '{cust_name_19}'")]
+        cust_id = custs[0]["id"]
+
+        resp = client.get(
+            "invoice",
+            params={
+                "customerId": cust_id,
+                "invoiceDateFrom": "2020-01-01",
+                "invoiceDateTo": "2030-01-01",
+                "count": 10,
+            },
+        )
+        invoices = resp.json().get("values", [])
+        if not invoices:
+            return [
+                ("customer_exists", True, f"id={cust_id}"),
+                ("invoice_exists", False, "No invoice found"),
+            ]
+
+        # Find the original invoice (not a credit note)
+        original = [i for i in invoices if not i.get("isCreditNote", False)]
+        if not original:
+            return [
+                ("customer_exists", True, f"id={cust_id}"),
+                ("invoice_exists", False, "No non-credit-note invoice found"),
+            ]
+        inv = original[0]
+        outstanding = inv.get("amountOutstanding", 0)
+
+        checks: list[VerifyCheck] = [
+            ("customer_exists", True, f"id={cust_id}"),
+            ("invoice_exists", True, f"id={inv['id']}"),
+        ]
+
+        # The payment should be reversed, so amountOutstanding should be back to the invoice amount
+        checks.append(
+            (
+                "payment_reversed",
+                outstanding > 0,
+                f"amountOutstanding={outstanding}, expected >0 (payment reversed)",
+            )
+        )
+        checks.append(
+            (
+                "amount_restored",
+                abs(outstanding - invoice_amount_19) < 1.0,
+                f"amountOutstanding={outstanding}, expected ~{invoice_amount_19}",
+            )
+        )
+
+        # Ensure no credit note was created (wrong approach)
+        credit_notes = [i for i in invoices if i.get("isCreditNote", False)]
+        checks.append(
+            (
+                "no_credit_note",
+                len(credit_notes) == 0,
+                f"Found {len(credit_notes)} credit notes — should reverse payment, not create credit note",
+            )
+        )
+
+        return checks
+
     return [
         {
             "name": "1.1 Create Employee (Norwegian)",
@@ -1521,6 +1851,7 @@ def build_tasks() -> list[SyntheticTask]:
             "prompt": (
                 f"Run payroll for {emp_first_7} {emp_last_7} ({emp_email_7}) for this month. "
                 f"The base salary is 34950 NOK. Add a one-time bonus of 15450 NOK on top of the base salary. "
+                f"Link the expense to the employee in the system. "
                 f"If the salary API is unavailable, you can use manual vouchers on salary accounts "
                 f"(5000-series) to record the payroll expense."
             ),
@@ -1684,6 +2015,55 @@ def build_tasks() -> list[SyntheticTask]:
             # + POST /ledger/voucher (1) = 5
             "optimal": 5,
         },
+        {
+            "name": "18.1 Receipt Expense as Voucher (German)",
+            "prompt": (
+                f"Wir benötigen die Tastatur-Ausgabe aus dieser Quittung in der Abteilung "
+                f'"{dept_name_18}". '
+                f"Verwenden Sie das richtige Aufwandskonto und stellen Sie die korrekte "
+                f"MwSt.-Behandlung sicher."
+            ),
+            "files": [
+                {
+                    "filename": "kvittering_tastatur.pdf",
+                    "content_base64": base64.b64encode(receipt_pdf_18).decode(),
+                },
+            ],
+            "setup": setup_task_18,
+            "verify": verify_task_18,
+            # GET /department (1) + GET /ledger/account (1) + POST /ledger/voucher (1) = 3
+            "optimal": 3,
+        },
+        {
+            "name": "19.1 Reverse Invoice Payment (Norwegian)",
+            "prompt": (
+                f'Betalingen fra {cust_name_19} for fakturaen "Systemutvikling" '
+                f"({invoice_amount_19:.0f} kr ekskl. MVA) ble returnert av banken. "
+                f"Reverser betalingen slik at fakturaen igjen viser utestående beløp."
+            ),
+            "setup": setup_task_19,
+            "verify": verify_task_19,
+            # GET /customer + GET /invoice + GET /ledger/posting (find payment voucher)
+            # + PUT /ledger/voucher/:reverse = 4
+            "optimal": 4,
+        },
+        {
+            "name": "20.1 Supplier Invoice Voucher (Spanish)",
+            "prompt": (
+                f'Registre una factura del proveedor "{supplier_name_20}" por un total de '
+                f"{supplier_invoice_gross_20:.0f} NOK (IVA incluido al 25%). "
+                f"Fecha: {supplier_invoice_date_20}. "
+                f"Débito la cuenta de gastos 6540 (inventar/utstyr) con el importe neto, "
+                f"y acredite la cuenta 2400 (leverandørgjeld) con el importe bruto. "
+                f"Asegúrese de vincular la línea del proveedor correctamente."
+            ),
+            "setup": setup_task_20,
+            "verify": verify_task_20,
+            # GET /supplier?name=... (1) + GET /ledger/account?number=6540,2400 (1)
+            # + POST /ledger/voucher (1) = 3
+            "optimal": 3,
+            "best": 3,
+        },
     ]
 
 
@@ -1705,12 +2085,6 @@ This tool is free and does not count toward your efficiency score.
 | Skill | Covers |
 |-------|--------|
 | _general | API patterns: references, responses, versioning, inline creation, error translations, lookups |
-| _optimality_agent | Generic call-minimization techniques + index of domain-specific optimality skills |
-| _optimality_employee | Employee inline patterns (employment + details in 1 call) |
-| _optimality_invoice | Invoice inline patterns (orders + lines in 1 call), payment/credit gotchas |
-| _optimality_travel | Travel inline patterns (all 4 sub-resources in 1 call), passenger supplement |
-| _optimality_project | Project inline patterns (participants + activities in 1 call) |
-| _optimality_ledger | Ledger account lookup optimization, payroll vouchers |
 | customer | Customer CRUD, address nested updates |
 | department | Department CRUD (no dependencies) |
 | employee | Employee + Employment, userType, department req |
@@ -1736,7 +2110,12 @@ The CLI tool is at: {cli_path}
 - `uv run python {cli_path} put <endpoint> --data '{{"key":"val"}}'` — PUT request
 - `uv run python {cli_path} delete <endpoint>` — DELETE request
 - `uv run python {cli_path} read-skill <skill_name>` — Read a skill reference (free, doesn't count)
-- `uv run python {cli_path} review-plan '<your plan>'` — Review your planned API calls for optimality (free, doesn't count)
+- `uv run python {cli_path} review-plan '<your plan>' --domains <domain> [<domain> ...]` — Review your planned API calls for optimality (free, doesn't count). Pick domain(s) matching the API endpoints in your plan:
+  - `employee` — /employee, /department, /employment
+  - `invoice` — /invoice, /order, /product, /customer
+  - `ledger` — /ledger, /voucher, /account, /posting
+  - `project` — /project, /activity, /timesheet
+  - `travel` — /travelExpense, /mileage, /perDiem, /accommodation
 
 Available skills: {', '.join(available_skills)}
 

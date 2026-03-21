@@ -5457,7 +5457,7 @@
         "tags": [
           "invoice"
         ],
-        "summary": "Update invoice. The invoice is updated with payment information. The amount is in the invoice\u2019s currency.",
+        "summary": "Update invoice. The invoice is updated with payment information. The amount is in the invoice’s currency.",
         "operationId": "InvoicePayment_payment",
         "parameters": [
           {
@@ -23952,7 +23952,7 @@
           },
           "amount": {
             "type": "number",
-            "description": "In the company\u2019s currency, typically NOK.",
+            "description": "In the company’s currency, typically NOK.",
             "readOnly": true
           },
           "amountCurrency": {
@@ -31767,7 +31767,7 @@
             "type": "string"
           }
         },
-        "description": "Voucher type. Must not be of type 'Utg\u00e5ende faktura' ('Outgoing Invoice') on new vouchers, instead use voucherType=null or use the Invoice endpoint."
+        "description": "Voucher type. Must not be of type 'Utgående faktura' ('Outgoing Invoice') on new vouchers, instead use voucherType=null or use the Invoice endpoint."
       },
       "WorkingHoursScheme": {
         "type": "object",

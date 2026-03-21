@@ -391,11 +391,50 @@ if [ -n "${IDS[INV_ID]:-}" ]; then
     record FAIL T55 "PUT /invoice/:createCreditNote" "got $LAST_CODE"
     validation_msg
   fi
+
+  # T55b: Reverse payment voucher — find payment voucher via invoice voucher
+  # The invoice has a voucher.id; the payment creates a separate voucher on account 1500.
+  api GET "invoice/${IDS[INV_ID]}" ""
+  IDS[INV_VOUCHER_ID]=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+v=json.load(sys.stdin)['value']
+print(v.get('voucher',{}).get('id',''))
+" 2>/dev/null || true)
+  # Find the payment voucher: posting on account 1500 whose voucher != invoice voucher
+  if [ -n "${IDS[INV_VOUCHER_ID]:-}" ]; then
+    api GET "ledger/posting?dateFrom=$TODAY&dateTo=$TOMORROW&customerId=${IDS[CUST_ID]}&fields=voucher(id),account(id,number),amount" ""
+    IDS[PAY_VOUCHER_ID]=$(echo "$LAST_BODY" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+inv_v=${IDS[INV_VOUCHER_ID]}
+for p in d.get('values',[]):
+    acct=p.get('account',{}).get('number',0)
+    vid=p.get('voucher',{}).get('id',0)
+    if acct==1500 and vid!=inv_v:
+        print(vid)
+        break
+" 2>/dev/null || true)
+    if [ -n "${IDS[PAY_VOUCHER_ID]:-}" ]; then
+      api PUT "ledger/voucher/${IDS[PAY_VOUCHER_ID]}/:reverse?date=$TODAY" ""
+      if [ "$LAST_CODE" = "200" ] || [ "$LAST_CODE" = "201" ]; then
+        IDS[REVERSAL_VOUCHER_ID]=$(extract_id)
+        record PASS T55b "PUT /ledger/voucher/:reverse (payment reversal)" "$LAST_CODE, REVERSAL_ID=${IDS[REVERSAL_VOUCHER_ID]:-?}"
+      else
+        record FAIL T55b "PUT /ledger/voucher/:reverse (payment reversal)" "got $LAST_CODE"
+        validation_msg
+      fi
+    else
+      record SKIP T55b "PUT /ledger/voucher/:reverse (payment reversal)" "could not find payment voucher"
+    fi
+  else
+    record SKIP T55b "PUT /ledger/voucher/:reverse (payment reversal)" "no invoice voucher ID"
+  fi
 else
   record SKIP T53 "PUT /invoice/:payment (body)" "no invoice"
   record SKIP T54 "PUT /invoice/:payment (query params)" "no invoice"
   record SKIP T55a "PUT /invoice/:createCreditNote (body)" "no invoice"
   record SKIP T55 "PUT /invoice/:createCreditNote" "no invoice"
+  record SKIP T55b "PUT /ledger/voucher/:reverse (payment reversal)" "no invoice"
 fi
 
 # T56: Invoice with multiple orderlines (unverified #12)
