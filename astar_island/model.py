@@ -13,6 +13,17 @@ from astar_island.client import RoundData
 from astar_island.client import ViewPortData
 from astar_island.rules import GameRules
 
+# Mapping from raw grid values to class indices
+RAW_VALUE_TO_CLASS = {
+    10: 0,  # ocean/water
+    11: 0,  # plains/empty land
+    1: 1,   # settlement
+    2: 2,   # port
+    3: 3,   # ruin
+    4: 4,   # forest
+    5: 5,   # mountain
+}
+
 
 @dataclass
 class SeedState:
@@ -203,3 +214,49 @@ class IslandModel:
         ] += 1
 
         self.observed_viewports.append(result)
+
+    def observed_probs(self, seed_index: int) -> NDArray[np.float64]:
+        """Build a probability array from observed viewport realizations.
+
+        - Static water cells: [1, 0, 0, 0, 0, 0]
+        - Static mountain cells: [0, 0, 0, 0, 0, 1]
+        - Observed dynamic cells: average of one-hot realizations across viewports
+        - Unobserved dynamic cells: uniform over feasible classes (5 non-mountain)
+
+        Returns:
+            (H, W, 6) probability array, each cell sums to 1.0.
+        """
+        grid = self.initial_grids[seed_index]
+        h, w = grid.shape
+        counts = self.query_counts[seed_index]
+
+        # Accumulate one-hot class counts from all viewports for this seed
+        class_counts = np.zeros((h, w, N_CLASSES), dtype=np.float64)
+        for vp in self.observed_viewports:
+            if vp.seed_index != seed_index:
+                continue
+            x, y = vp.viewport_x, vp.viewport_y
+            vh, vw = vp.viewport_h, vp.viewport_w
+            for raw_val, class_idx in RAW_VALUE_TO_CLASS.items():
+                mask = vp.grid == raw_val
+                class_counts[y : y + vh, x : x + vw, class_idx] += mask
+
+        # Normalize observed cells by query count
+        observed = counts > 0
+        probs = np.zeros((h, w, N_CLASSES), dtype=np.float64)
+
+        # Observed cells: empirical average
+        obs_counts = counts[observed]
+        probs[observed] = class_counts[observed] / obs_counts[:, np.newaxis]
+
+        # Unobserved dynamic cells: uniform over non-mountain classes (5 classes)
+        unobserved_dynamic = ~observed & (grid != 10) & (grid != 5)
+        probs[unobserved_dynamic] = [0.2, 0.2, 0.2, 0.2, 0.2, 0.0]
+
+        # Static cells: deterministic
+        water = grid == 10
+        mountain = grid == 5
+        probs[water] = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        probs[mountain] = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+        return self.rules.enforce_probs(probs, grid)
