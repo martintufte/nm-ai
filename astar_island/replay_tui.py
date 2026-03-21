@@ -139,39 +139,36 @@ class GridWidget(Widget):
             self.post_message(self.CellClicked(x, y))
 
 
-class InfoPanel(Static):
+class InfoPanel(Widget):
     """Shows frame info, selected cell detail, and cell history."""
+
+    frame_index: reactive[int] = reactive(0, layout=False)
+    selected_x: reactive[int] = reactive(-1, layout=False)
+    selected_y: reactive[int] = reactive(-1, layout=False)
 
     def __init__(self, replay: Replay, **kwargs) -> None:
         super().__init__(**kwargs)
         self.replay = replay
-        self._frame_index = 0
-        self._selected: tuple[int, int] | None = None
-
-    def on_mount(self) -> None:
-        log.debug("InfoPanel.on_mount called")
-        self._render_content()
 
     def update_frame(self, index: int) -> None:
-        log.debug("InfoPanel.update_frame(%d)", index)
-        self._frame_index = index
-        self._render_content()
+        self.frame_index = index
 
     def update_selection(self, x: int, y: int) -> None:
-        log.debug("InfoPanel.update_selection(%d, %d)", x, y)
-        self._selected = (x, y)
-        self._render_content()
+        self.selected_x = x
+        self.selected_y = y
 
-    def _render_content(self) -> None:
+    def watch_frame_index(self, value: int) -> None:
+        self.refresh()
+
+    def watch_selected_x(self, value: int) -> None:
+        self.refresh()
+
+    def render(self) -> str:
         from rich.text import Text
 
         text = Text()
-        frame = self.replay.frames[self._frame_index]
-        transitions = self.replay.transitions_at_step(self._frame_index)
-        log.debug(
-            "InfoPanel._render_content: frame=%d, transitions=%d, selected=%s",
-            self._frame_index, len(transitions), self._selected,
-        )
+        frame = self.replay.frames[self.frame_index]
+        transitions = self.replay.transitions_at_step(self.frame_index)
 
         # Frame info
         text.append(f"Step {frame.step}", style="bold #e0e0e0")
@@ -189,38 +186,32 @@ class InfoPanel(Static):
             text.append("\n")
 
         # Selected cell
-        if self._selected:
-            x, y = self._selected
+        if self.selected_x >= 0:
+            x, y = self.selected_x, self.selected_y
             val = int(frame.grid[y, x])
             text.append(f"Cell ({x}, {y})\n", style="bold #e0e0e0")
             text.append(f"Terrain: {tile_name(val)} (raw={val})\n", style="#e0e0e0")
 
             settlement = frame.settlement_at(x, y)
             if settlement:
-                self._append_settlement(text, settlement)
+                text.append(f"  Owner: {settlement.owner_id}", style="#e0e0e0")
+                if settlement.has_port:
+                    text.append(" PORT", style="bold yellow")
+                if not settlement.alive:
+                    text.append(" DEAD", style="bold red")
+                text.append(f"\n  Pop: {settlement.population:.3f}  Food: {settlement.food:.3f}\n", style="#e0e0e0")
+                text.append(f"  Wealth: {settlement.wealth:.3f}  Def: {settlement.defense:.3f}\n", style="#e0e0e0")
 
             history = self.replay.cell_history(x, y)
             if history:
                 text.append(f"\nHistory ({len(history)} transitions):\n", style="bold #e0e0e0")
                 for t in history:
-                    marker = " <<" if t.step == self._frame_index else ""
+                    marker = " <<" if t.step == self.frame_index else ""
                     text.append(f"  step {t.step:2d}: {t.old_name} -> {t.new_name}{marker}\n", style="#e0e0e0")
             else:
-                text.append("No transitions (static cell)\n", style="dim #e0e0e0")
+                text.append("No transitions (static cell)\n", style="#808080")
 
-        log.debug("InfoPanel: updating with %d chars of text", len(text.plain))
-        self.update(text)
-
-    def _append_settlement(self, text, s: Settlement) -> None:
-        from rich.text import Text
-
-        text.append(f"  Owner: {s.owner_id}", style="#e0e0e0")
-        if s.has_port:
-            text.append(" PORT", style="bold yellow")
-        if not s.alive:
-            text.append(" DEAD", style="bold red")
-        text.append(f"\n  Pop: {s.population:.3f}  Food: {s.food:.3f}\n", style="#e0e0e0")
-        text.append(f"  Wealth: {s.wealth:.3f}  Def: {s.defense:.3f}\n", style="#e0e0e0")
+        return text
 
 
 class LegendPanel(Static):
@@ -272,9 +263,9 @@ class ReplayTUI(App):
         height: auto;
     }
     #info {
-        height: auto;
+        height: 1fr;
         padding: 0 1;
-        color: #e0e0e0;
+        overflow-y: auto;
     }
     #legend {
         height: auto;
@@ -317,10 +308,8 @@ class ReplayTUI(App):
         self._sync_ui()
 
     def _sync_ui(self) -> None:
-        grid = self.query_one("#grid", GridWidget)
-        info = self.query_one("#info", InfoPanel)
-        grid.frame_index = self._frame_index
-        info.update_frame(self._frame_index)
+        self.query_one("#grid", GridWidget).frame_index = self._frame_index
+        self.query_one("#info", InfoPanel).frame_index = self._frame_index
 
     def action_step_forward(self) -> None:
         if self._frame_index < len(self.replay) - 1:
