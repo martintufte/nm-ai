@@ -92,6 +92,34 @@ class RoundData:
 
 
 @dataclass
+class ViewPortData:
+    """Parsed response from the simulate API endpoint."""
+
+    round_id: str
+    seed_index: int
+    viewport_x: int
+    viewport_y: int
+    viewport_w: int
+    viewport_h: int
+    grid: NDArray[np.int16]
+
+    @classmethod
+    def from_api(cls, data: dict, round_id: str, seed_index: int) -> "ViewPortData":
+        """Parse the raw API JSON response into ViewPortData."""
+        grid = np.array(data["grid"], dtype=np.int16)
+        h, w = grid.shape
+        return cls(
+            round_id=round_id,
+            seed_index=seed_index,
+            viewport_x=data["x"],
+            viewport_y=data["y"],
+            viewport_w=w,
+            viewport_h=h,
+            grid=grid,
+        )
+
+
+@dataclass
 class AnalysisData:
     """Parsed response from the get_analysis API endpoint."""
 
@@ -148,7 +176,7 @@ class AstarIslandClient:
             active=data["active"],
         )
 
-    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> dict:
+    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> ViewPortData:
         """Query a 15x15 viewport (costs 1 query).
 
         Args:
@@ -158,7 +186,7 @@ class AstarIslandClient:
             y: Top-left y coordinate of viewport
 
         Returns:
-            Grid data, settlements list, viewport bounds.
+            ViewPortData with grid and viewport bounds.
         """
         resp = self.session.post(
             f"{BASE_URL}/simulate",
@@ -170,7 +198,7 @@ class AstarIslandClient:
             },
         )
         resp.raise_for_status()
-        return resp.json()
+        return ViewPortData.from_api(resp.json(), round_id, seed_index)
 
     def submit(self, round_id: str, predictions: NDArray[np.float64]) -> dict:
         """Submit predictions.

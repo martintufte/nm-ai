@@ -332,8 +332,9 @@ class TestPriorDistributions:
         "prior",
         [PRIOR_SETTLEMENT, PRIOR_FOREST, PRIOR_EMPTY_LAND],
     )
-    def test_dynamic_priors_no_zeros(self, prior: np.ndarray) -> None:
-        assert (prior > 0).all()
+    def test_dynamic_priors_no_mountain(self, prior: np.ndarray) -> None:
+        assert prior[5] == 0.0  # mountain class should be 0
+        assert (prior[:5] > 0).all()  # all non-mountain classes should be > 0
 
     @pytest.mark.parametrize(
         "prior",

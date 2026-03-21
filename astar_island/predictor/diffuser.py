@@ -5,7 +5,6 @@ kernels to model settlement dynamics. Viewport observations override predictions
 in the observed region.
 """
 
-import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,8 +14,6 @@ from astar_island.client import N_CLASSES
 from astar_island.model import IslandPredictor
 from astar_island.model import SeedState
 
-LOGGER = logging.getLogger(__name__)
-
 # --- Prior distributions per terrain type ---
 # Order: [empty, settlement, port, ruin, forest, mountain]
 
@@ -24,11 +21,11 @@ LOGGER = logging.getLogger(__name__)
 PRIOR_WATER = np.array([1.00, 0.00, 0.00, 0.00, 0.00, 0.00])
 PRIOR_MOUNTAIN = np.array([0.00, 0.00, 0.00, 0.00, 0.00, 1.00])
 
-# Dynamic priors
-PRIOR_SETTLEMENT = np.array([0.10, 0.25, 0.15, 0.25, 0.15, 0.10])
-PRIOR_COASTAL_SETTLEMENT = np.array([0.08, 0.15, 0.30, 0.22, 0.15, 0.10])
-PRIOR_FOREST = np.array([0.15, 0.05, 0.02, 0.08, 0.65, 0.05])
-PRIOR_EMPTY_LAND = np.array([0.40, 0.12, 0.05, 0.13, 0.25, 0.05])
+# Dynamic priors (mountain class = 0, enforced by rules)
+PRIOR_SETTLEMENT = np.array([0.10, 0.30, 0.15, 0.20, 0.25, 0.00])
+PRIOR_COASTAL_SETTLEMENT = np.array([0.08, 0.20, 0.30, 0.17, 0.25, 0.00])
+PRIOR_FOREST = np.array([0.15, 0.05, 0.02, 0.08, 0.70, 0.00])
+PRIOR_EMPTY_LAND = np.array([0.45, 0.12, 0.05, 0.08, 0.30, 0.00])
 
 
 @dataclass
@@ -72,17 +69,6 @@ DEFAULT_KERNELS = [
 ]
 
 DEFAULT_NUM_STEPS = 3
-
-# Mapping from raw viewport values to one-hot class index
-VIEWPORT_VALUE_TO_CLASS = {
-    10: 0,  # ocean/water
-    11: 0,  # plains/empty land
-    1: 1,  # settlement
-    2: 2,  # port
-    3: 3,  # ruin
-    4: 4,  # forest
-    5: 5,  # mountain
-}
 
 
 def _convolve2d(arr: NDArray[np.float64], kernel: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -162,51 +148,14 @@ class DiffusionPredictor(IslandPredictor):
         self.kernels = kernels or DEFAULT_KERNELS
         self.num_steps = num_steps
 
-    def predict(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
+    def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
         static_mask = seed_state.water_mask | seed_state.mountain_mask
-        static_probs = _build_prior(seed_state)
+        prior = _build_prior(seed_state)
 
-        probs = _apply_diffusion(
-            probs,
+        return _apply_diffusion(
+            prior,
             self.kernels,
             self.num_steps,
             static_mask,
-            static_probs,
+            prior,
         )
-
-        return probs
-
-    def update(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> NDArray[np.float64]:
-        vp = np.array(viewport_grid, dtype=np.int16)
-        vh, vw = vp.shape
-
-        # Convert viewport raw values to one-hot probability vectors
-        one_hot = np.zeros((vh, vw, N_CLASSES), dtype=np.float64)
-        for raw_val, class_idx in VIEWPORT_VALUE_TO_CLASS.items():
-            mask = vp == raw_val
-            one_hot[mask, class_idx] = 1.0
-
-        # Override observed region as hard evidence
-        probs = probs.copy()
-        y0, x0 = viewport_y, viewport_x
-        probs[y0 : y0 + vh, x0 : x0 + vw] = one_hot
-
-        LOGGER.info(
-            "Seed %d: observed viewport (%d, %d) — %d cells",
-            seed_state.seed_index,
-            viewport_x,
-            viewport_y,
-            vh * vw,
-        )
-        return probs

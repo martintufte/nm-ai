@@ -175,3 +175,70 @@ def plot_heatmap_combined(
     ax.set_yticks([])
     fig.tight_layout()
     return fig
+
+
+def plot_query_coverage(
+    raw_grids: list[NDArray[np.int16]],
+    query_counts: list[NDArray[np.int32]],
+    suptitle: str = "Query Coverage",
+) -> plt.Figure:
+    """Plot a 2xN grid: top row = initial board, bottom row = query heatmap overlay.
+
+    Args:
+        raw_grids: Per-seed initial grids.
+        query_counts: Per-seed (H, W) query count arrays.
+        suptitle: Figure title.
+    """
+    n_seeds = len(raw_grids)
+    fig, axes = plt.subplots(2, n_seeds, figsize=(4 * n_seeds, 8), facecolor="#1e1e1e")
+
+    max_count = max(int(c.max()) for c in query_counts)
+    max_count = max(max_count, 1)
+
+    for seed_idx in range(n_seeds):
+        grid = raw_grids[seed_idx]
+        counts = query_counts[seed_idx]
+
+        # Top row: initial board
+        ax_board = axes[0, seed_idx]
+        h, w = grid.shape
+        rgb = np.zeros((h, w, 3), dtype=np.float64)
+        for raw_val, hex_color in BOARD_RAW_COLORS.items():
+            mask = grid == raw_val
+            rgb[mask] = _hex_to_rgb(hex_color)
+        ax_board.imshow(rgb, interpolation="nearest")
+        ax_board.set_title(f"Seed {seed_idx}", fontsize=12, fontweight="bold", color="white")
+        ax_board.set_xticks([])
+        ax_board.set_yticks([])
+
+        # Bottom row: board with query heatmap overlay
+        ax_heat = axes[1, seed_idx]
+        ax_heat.imshow(rgb, interpolation="nearest")
+
+        # Green overlay with alpha proportional to query count
+        overlay = np.zeros((h, w, 4), dtype=np.float64)
+        green = _hex_to_rgb("#44cc44")
+        norm_counts = counts.astype(np.float64) / max_count
+        overlay[:, :, 0] = green[0]
+        overlay[:, :, 1] = green[1]
+        overlay[:, :, 2] = green[2]
+        overlay[:, :, 3] = norm_counts * 0.95
+
+        ax_heat.imshow(overlay, interpolation="nearest")
+
+        # Label: observed cells + avg queries on non-static cells
+        static = (grid == 10) | (grid == 5)
+        dynamic_counts = counts[~static]
+        avg_dynamic = float(dynamic_counts.mean()) if dynamic_counts.size > 0 else 0.0
+        n_observed = int((counts > 0).sum())
+        ax_heat.set_title(
+            f"{n_observed}/{h * w} observed, avg {avg_dynamic:.1f}x on dynamic",
+            fontsize=10,
+            color="white",
+        )
+        ax_heat.set_xticks([])
+        ax_heat.set_yticks([])
+
+    fig.suptitle(suptitle, fontsize=16, fontweight="bold", color="white")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # ty: ignore[invalid-argument-type]
+    return fig

@@ -21,10 +21,10 @@ from numpy.typing import NDArray
 
 from astar_island.model import IslandModel
 from astar_island.model import IslandPredictor
-from astar_island.simulator import VIEWPORT_SIZE
 from astar_island.simulator import AstarIslandSimulator
 from astar_island.visualize import plot_heatmap_combined
 from astar_island.visualize import plot_heatmap_grid
+from astar_island.visualize import plot_query_coverage
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,34 +40,14 @@ def _create_experiment_dir(name: str) -> Path:
     return exp_dir
 
 
-def _distribute_queries(n_queries: int, n_seeds: int) -> list[int]:
-    """Distribute queries evenly across seeds."""
-    base = n_queries // n_seeds
-    remainder = n_queries % n_seeds
-    return [base + (1 if i < remainder else 0) for i in range(n_seeds)]
-
-
-def _pick_viewport_positions(
-    h: int,
-    w: int,
-    n_queries: int,
-    rng: np.random.Generator,
-) -> list[tuple[int, int]]:
-    """Pick random viewport top-left positions within map bounds."""
-    max_x = max(0, w - VIEWPORT_SIZE)
-    max_y = max(0, h - VIEWPORT_SIZE)
-    xs = rng.integers(0, max_x + 1, size=n_queries)
-    ys = rng.integers(0, max_y + 1, size=n_queries)
-    return list(zip(xs.tolist(), ys.tolist(), strict=True))
-
-
 def _save_heatmaps(
     exp_dir: Path,
     seed_idx: int,
     ground_truth: NDArray[np.float64],
     predictions: NDArray[np.float64],
+    observed: NDArray[np.float64] | None = None,
 ) -> None:
-    """Save ground truth and prediction heatmaps for a single seed."""
+    """Save ground truth, prediction, and observed heatmaps for a single seed."""
     seed_dir = exp_dir / f"seed_{seed_idx}"
     seed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,6 +90,26 @@ def _save_heatmaps(
         facecolor=fig.get_facecolor(),
     )
     plt.close(fig)
+
+    # Observed probs heatmaps (only when queries were run)
+    if observed is not None:
+        fig = plot_heatmap_grid(observed, suptitle=f"Seed {seed_idx} — Observed")
+        fig.savefig(
+            seed_dir / "obs_channels.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
+
+        fig = plot_heatmap_combined(observed, title=f"Seed {seed_idx} — Observed Combined")
+        fig.savefig(
+            seed_dir / "obs_combined.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
 
 
 def _save_score_summary(
@@ -169,7 +169,6 @@ def run_experiment(
     Returns:
         Path to the experiment directory.
     """
-    rng = np.random.default_rng(rng_seed)
     sim = AstarIslandSimulator.from_round_number(
         round_number,
         queries_max=n_queries,
@@ -187,21 +186,16 @@ def run_experiment(
         n_queries,
     )
 
-    # Run viewport queries distributed across seeds
+    # Run viewport queries
     if n_queries > 0:
-        queries_per_seed = _distribute_queries(n_queries, round_data.seeds_count)
-        for seed_idx, seed_n_queries in enumerate(queries_per_seed):
-            positions = _pick_viewport_positions(
-                round_data.map_height,
-                round_data.map_width,
-                seed_n_queries,
-                rng,
-            )
-            for x, y in positions:
-                result = sim.simulate(sim.round_id, seed_idx, x, y)
-                model.update(seed_idx, result["grid"], result["x"], result["y"])
+        from astar_island.query_selector import select_queries  # noqa: PLC0415
 
-        LOGGER.info("Ran %d queries (%s per seed)", n_queries, queries_per_seed)
+        queries = select_queries(model)
+        for seed_idx, x, y in queries:
+            result = sim.simulate(sim.round_id, seed_idx, x, y)
+            model.update(result)
+
+        LOGGER.info("Ran %d queries", len(queries))
 
     # Generate predictions
     predictions: dict[int, NDArray[np.float64]] = {}
@@ -231,15 +225,32 @@ def run_experiment(
 
     # Save heatmaps per seed
     for seed_idx in range(round_data.seeds_count):
+        observed = model.observed_probs(seed_idx) if n_queries > 0 else None
         _save_heatmaps(
             exp_dir,
             seed_idx,
             ground_truth=sim.ground_truth[seed_idx],
             predictions=predictions[seed_idx],
+            observed=observed,
         )
 
     # Save score summary chart
     _save_score_summary(exp_dir, scores, avg_score)
+
+    # Save query coverage plot
+    if n_queries > 0:
+        fig = plot_query_coverage(
+            raw_grids=model.initial_grids,
+            query_counts=[model.query_counts[i] for i in range(round_data.seeds_count)],
+            suptitle=f"Query Coverage — {n_queries} queries",
+        )
+        fig.savefig(
+            exp_dir / "query_coverage.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+        plt.close(fig)
 
     LOGGER.info("Experiment saved to %s", exp_dir)
     return exp_dir

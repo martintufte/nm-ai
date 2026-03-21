@@ -15,25 +15,11 @@ class EmptyPredictor(IslandPredictor):
     that nothing changes from an empty map.
     """
 
-    def predict(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
+    def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
         h, w = seed_state.water_mask.shape
         p = np.zeros((h, w, N_CLASSES), dtype=np.float64)
         p[:, :, 0] = 1.0
         return p
-
-    def update(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> NDArray[np.float64]:
-        return probs
 
 
 class UniformPredictor(IslandPredictor):
@@ -43,23 +29,9 @@ class UniformPredictor(IslandPredictor):
     worse than this is actively harmful.
     """
 
-    def predict(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
+    def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
         h, w = seed_state.water_mask.shape
         return np.full((h, w, N_CLASSES), 1.0 / N_CLASSES, dtype=np.float64)
-
-    def update(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> NDArray[np.float64]:
-        return probs
 
 
 class PerfectPredictor(IslandPredictor):
@@ -70,26 +42,7 @@ class PerfectPredictor(IslandPredictor):
     """
 
     def __init__(self, ground_truth: NDArray[np.float64]) -> None:
-        """Initialize with ground truth.
-
-        Args:
-            ground_truth: (n_seeds, H, W, 6) probability array.
-        """
         self.ground_truth = ground_truth
 
-    def predict(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
+    def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
         return self.ground_truth[seed_state.seed_index].copy()
-
-    def update(
-        self,
-        seed_state: SeedState,
-        probs: NDArray[np.float64],
-        viewport_grid: list[list[int]],
-        viewport_x: int,
-        viewport_y: int,
-    ) -> NDArray[np.float64]:
-        return probs
