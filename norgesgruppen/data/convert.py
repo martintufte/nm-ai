@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import random
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -51,6 +52,11 @@ def convert_coco_to_yolo(
     val_fraction: float = 0.15,
     single_class: bool = False,
     seed: int = 42,
+    *,
+    dataset_dir: Path | None = None,
+    train_ids: set[int] | None = None,
+    val_ids: set[int] | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """Convert COCO dataset to YOLO format.
 
@@ -58,6 +64,10 @@ def convert_coco_to_yolo(
         val_fraction: Fraction of images for validation.
         single_class: If True, all objects get class 0 (detection-only mode).
         seed: Random seed for train/val split.
+        dataset_dir: Directory where the YOLO dataset will be written.
+        train_ids: Explicit set of image ids that should go into train.
+        val_ids: Explicit set of image ids that should go into val.
+        overwrite: Remove the target directory before writing.
 
     Returns:
         Path to generated dataset.yaml
@@ -78,23 +88,56 @@ def convert_coco_to_yolo(
     if single_class:
         num_classes = 1
         class_names = ["product"]
+        cat_id_to_idx: dict[int, int] = {}
     else:
         num_classes = len(categories)
         cat_id_to_idx = {cat["id"]: idx for idx, cat in enumerate(categories)}
         class_names = [cat["name"] for cat in categories]
 
     # Train/val split
+    dataset_dir = Path(dataset_dir) if dataset_dir is not None else YOLO_DIR
+    if overwrite and dataset_dir.exists():
+        shutil.rmtree(dataset_dir)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
     image_ids = sorted(images_by_id.keys())
-    random.seed(seed)
-    random.shuffle(image_ids)
-    val_count = 0 if val_fraction <= 0 else max(1, int(len(image_ids) * val_fraction))
-    val_ids = set(image_ids[:val_count])
-    train_ids = set(image_ids[val_count:])
+    if train_ids is not None:
+        train_ids = set(train_ids)
+    if val_ids is not None:
+        val_ids = set(val_ids)
+
+    if train_ids is None and val_ids is None:
+        random.seed(seed)
+        random.shuffle(image_ids)
+        val_count = 0 if val_fraction <= 0 else max(1, int(len(image_ids) * val_fraction))
+        val_ids = set(image_ids[:val_count])
+        train_ids = set(image_ids[val_count:])
+    elif train_ids is None:
+        train_ids = set(image_ids) - val_ids
+    elif val_ids is None:
+        val_ids = set(image_ids) - train_ids
+    else:
+        # Ensure we only reference known IDs
+        val_ids &= set(image_ids)
+        train_ids &= set(image_ids)
+
+    all_ids = set(image_ids)
+    if train_ids is None:
+        train_ids = set()
+    if val_ids is None:
+        val_ids = set()
+    missing = all_ids - (train_ids | val_ids)
+    if missing:
+        train_ids |= missing
+    overlap = train_ids & val_ids
+    if overlap:
+        LOGGER.warning("train/val split overlap detected for %d images; assigning to train", len(overlap))
+        val_ids -= overlap
 
     # Create directory structure
     for split in ["train", "val"]:
-        (YOLO_DIR / split / "images").mkdir(parents=True, exist_ok=True)
-        (YOLO_DIR / split / "labels").mkdir(parents=True, exist_ok=True)
+        (dataset_dir / split / "images").mkdir(parents=True, exist_ok=True)
+        (dataset_dir / split / "labels").mkdir(parents=True, exist_ok=True)
 
     # Write labels and symlink images
     for img_id, img_info in images_by_id.items():
@@ -106,12 +149,12 @@ def convert_coco_to_yolo(
 
         # Symlink image
         src = (images_dir / img_filename).resolve()
-        dst = YOLO_DIR / split / "images" / img_filename
+        dst = dataset_dir / split / "images" / img_filename
         if not dst.exists() and src.exists():
             dst.symlink_to(src)
 
         # Write YOLO label
-        label_path = YOLO_DIR / split / "labels" / f"{stem}.txt"
+        label_path = dataset_dir / split / "labels" / f"{stem}.txt"
         lines = []
         for ann in annotations_by_image.get(img_id, []):
             cx, cy, nw, nh = coco_to_yolo_bbox(ann["bbox"], img_w, img_h)
@@ -122,8 +165,9 @@ def convert_coco_to_yolo(
 
     # Write dataset.yaml
     yaml_path = YOLO_DIR / "dataset.yaml"
+    yaml_path = dataset_dir / "dataset.yaml"
     yaml_lines = [
-        f"path: {YOLO_DIR.resolve()}",
+        f"path: {dataset_dir.resolve()}",
         "train: train/images",
         "val: val/images" if val_ids else "val: train/images",
         f"nc: {num_classes}",
@@ -133,7 +177,7 @@ def convert_coco_to_yolo(
     yaml_content = "\n".join(yaml_lines)
     yaml_path.write_text(yaml_content)
 
-    LOGGER.info("YOLO dataset created at %s", YOLO_DIR)
+    LOGGER.info("YOLO dataset created at %s", dataset_dir)
     LOGGER.info("  Train: %d images", len(train_ids))
     LOGGER.info("  Val:   %d images", len(val_ids))
     LOGGER.info(

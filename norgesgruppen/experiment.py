@@ -42,8 +42,8 @@ DATA_DIR = Path(__file__).parent / "data"
 ANNOTATIONS_PATH = DATA_DIR / "NM_NGD_coco_dataset" / "train" / "annotations.json"
 
 # Threshold grids for post-training sweep
-CONF_THRESHOLDS = [0.09, 0.1, 0.125, 0.15, 0.2, 0.25]
-IOU_THRESHOLDS = [0.5, 0.6, 0.65, 0.7, 0.75]
+CONF_THRESHOLDS = [0.06, 0.065, 0.07, 0.075, 0.08, 0.085, 0.09]
+IOU_THRESHOLDS = [0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57]
 
 
 def patch_load() -> None:
@@ -131,16 +131,16 @@ def run_experiment(
     batch: int = -1,
     multi_class: bool = False,
     pretrained_weights: str | None = None,
-    max_detections: int = 300,
-    mosaic: float = 0.5,
-    mixup: float = 0.1,
-    copy_paste: float = 0.1,
+    max_detections: int = 250,
+    mosaic: float = 0.6,
+    mixup: float = 0.15,
+    copy_paste: float = 0.15,
     optimizer: str = "AdamW",
     lr0: float = 0.001,
     lrf: float = 0.01,
     warmup_epochs: int = 3,
     patience: int = 20,
-    val_fraction: float = 0.15,
+    val_fraction: float = 0.10,
     seed: int = 42,
     model_variant: str = "yolov8",
     device: str = "auto",
