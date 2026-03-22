@@ -419,72 +419,58 @@ def build_tasks() -> list[SyntheticTask]:
         total_salary = 34950 + 15450  # base + bonus = 50400
         today = datetime.now(tz=UTC).date()
         tomorrow = today + timedelta(days=1)
-        # Find the employee ID for later matching
+        # Find the employee ID
         emp_resp = client.get(
             "employee",
             params={"firstName": emp_first_7, "lastName": emp_last_7, "count": 1},
         )
         emp_values = emp_resp.json().get("values", [])
         expected_emp_id = emp_values[0]["id"] if emp_values else None
-        # Find recent vouchers — dateFrom/dateTo required, dateTo is exclusive
-        resp = client.get(
-            "ledger/voucher",
+        # Use posting endpoint with employeeId filter to find salary postings for this employee
+        posting_resp = client.get(
+            "ledger/posting",
             params={
                 "dateFrom": today.isoformat(),
                 "dateTo": tomorrow.isoformat(),
-                "count": 200,
+                "employeeId": str(expected_emp_id) if expected_emp_id else "0",
+                "count": 100,
+                "fields": "*,account(*),employee(*),voucher(*)",
             },
         )
-        vouchers = resp.json().get("values", [])
-        # Search newest first (highest ID) to avoid picking up stale vouchers from prior runs
-        vouchers.sort(key=lambda v: v["id"], reverse=True)
-        # Find a voucher with salary postings linked to the expected employee
-        target_voucher = None
-        target_postings = None
-        fallback_voucher = None
-        fallback_postings = None
-        for v in vouchers:
-            postings = v.get("postings", [])
-            # Postings in listing are stubs — fetch with expanded fields
-            if postings and not postings[0].get("account", {}).get("number"):
-                resp2 = client.get(
-                    f"ledger/voucher/{v['id']}",
-                    params={"fields": "postings(*,account(*),employee(*))"},
-                )
-                postings = resp2.json().get("value", {}).get("postings", [])
-            for p in postings:
-                acct_num = p.get("account", {}).get("number", 0)
-                if 5000 <= acct_num < 6000 and abs(p.get("amountGross", 0)) > 0:
-                    emp = p.get("employee")
-                    if emp and emp.get("id") == expected_emp_id:
-                        target_voucher = v
-                        target_postings = postings
-                    elif fallback_voucher is None:
-                        fallback_voucher = v
-                        fallback_postings = postings
-                    break
-            if target_voucher:
-                break
-        # Use employee-matched voucher if found, otherwise fall back to any salary voucher
-        if not target_voucher:
-            target_voucher = fallback_voucher
-            target_postings = fallback_postings
-        if not target_voucher or target_postings is None:
+        postings = posting_resp.json().get("values", [])
+        # Find a salary-account posting (5000-series)
+        salary_posting = next(
+            (
+                p
+                for p in postings
+                if 5000 <= p.get("account", {}).get("number", 0) < 6000
+                and p.get("amountGross", 0) > 0
+            ),
+            None,
+        )
+        if not salary_posting:
             return [
                 (
                     "voucher_exists",
                     False,
-                    f"No voucher with 5000-series account found among {len(vouchers)} vouchers on {today}",
+                    f"No salary posting (5000-series) for employee {expected_emp_id} on {today}",
                 ),
             ]
+        voucher_id = salary_posting.get("voucher", {}).get("id")
+        # Fetch full voucher to get all postings
+        v_resp = client.get(
+            f"ledger/voucher/{voucher_id}",
+            params={"fields": "postings(*,account(*),employee(*))"},
+        )
+        target_postings = v_resp.json().get("value", {}).get("postings", [])
         debit_total = sum(
             p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) > 0
         )
         credit_total = sum(
             p.get("amountGross", 0) for p in target_postings if p.get("amountGross", 0) < 0
         )
-        # Check employee association on salary posting (5000-series debit)
-        salary_posting = next(
+        # Re-find salary posting in full voucher postings for employee check
+        salary_in_voucher = next(
             (
                 p
                 for p in target_postings
@@ -493,10 +479,10 @@ def build_tasks() -> list[SyntheticTask]:
             ),
             None,
         )
-        posting_emp = salary_posting.get("employee") if salary_posting else None
+        posting_emp = salary_in_voucher.get("employee") if salary_in_voucher else None
         posting_emp_id = posting_emp.get("id") if posting_emp else None
         checks: list[VerifyCheck] = [
-            ("voucher_exists", True, f"id={target_voucher['id']}"),
+            ("voucher_exists", True, f"id={voucher_id}"),
             (
                 "debit_amount",
                 debit_total == total_salary,
@@ -1072,8 +1058,7 @@ def build_tasks() -> list[SyntheticTask]:
 
         # Both employees are participants
         resp2 = client.get(
-            f"project/{proj['id']}",
-            params={"fields": "participants(employee(*))"},
+            f"project/{proj['id']}", params={"fields": "participants(employee(*))"}
         )
         participants = resp2.json().get("value", {}).get("participants", [])
         participant_emails = [p.get("employee", {}).get("email") for p in participants]
@@ -1082,7 +1067,7 @@ def build_tasks() -> list[SyntheticTask]:
             (emp_email_14b, "participant_b"),
         ]:
             checks.append(
-                (label, email in participant_emails, f"expected {email} in {participant_emails}"),
+                (label, email in participant_emails, f"expected {email} in {participant_emails}")
             )
 
         # Timesheet entries exist
@@ -1108,7 +1093,7 @@ def build_tasks() -> list[SyntheticTask]:
             entries = resp_t.json().get("values", [])
             has_hours = any(e.get("hours") == hours for e in entries)
             checks.append(
-                (label, has_hours, f"entries hours: {[e.get('hours') for e in entries]}"),
+                (label, has_hours, f"entries hours: {[e.get('hours') for e in entries]}")
             )
         return checks
 
@@ -1237,7 +1222,8 @@ def build_tasks() -> list[SyntheticTask]:
 
     def verify_task_16(client: httpx.Client) -> list[VerifyCheck]:
         tomorrow = (
-            datetime.strptime(reclass_date, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+            datetime.strptime(reclass_date, "%Y-%m-%d").replace(tzinfo=UTC)
+            + timedelta(days=1)
         ).date()
         resp = client.get(
             "ledger/voucher",
@@ -1339,7 +1325,7 @@ def build_tasks() -> list[SyntheticTask]:
             acct_numbers = {p.get("account", {}).get("number", 0) for p in postings}
             has_salary = any(5000 <= n < 6000 for n in acct_numbers)
             has_depreciation = 6010 in acct_numbers
-            has_accrual = 7700 in acct_numbers or 1710 in acct_numbers  # noqa: F841
+            has_accrual = 7700 in acct_numbers or 1710 in acct_numbers
             if has_salary and has_depreciation:
                 matching_vouchers.append(v)
                 # Re-attach expanded postings for checks
@@ -1462,11 +1448,7 @@ def build_tasks() -> list[SyntheticTask]:
 
         if not target:
             checks.append(
-                (
-                    "voucher_with_dimension",
-                    False,
-                    f"No voucher on 6340 with {dim_field}=IT among {len(vouchers)} vouchers",
-                ),
+                ("voucher_with_dimension", False, f"No voucher on 6340 with {dim_field}=IT among {len(vouchers)} vouchers")
             )
             return checks
 
@@ -1476,22 +1458,20 @@ def build_tasks() -> list[SyntheticTask]:
             for p in postings
             if p.get("account", {}).get("number") == 6340 and p.get("amountGross", 0) > 0
         )
-        checks.extend(
-            [
-                ("voucher_with_dimension", True, f"id={target['id']}"),
-                (
-                    "correct_amount",
-                    abs(debit_6340 - 5050) < 0.01,
-                    f"debit 6340={debit_6340}, expected 5050",
-                ),
-            ],
-        )
+        checks.extend([
+            ("voucher_with_dimension", True, f"id={target['id']}"),
+            (
+                "correct_amount",
+                abs(debit_6340 - 5050) < 0.01,
+                f"debit 6340={debit_6340}, expected 5050",
+            ),
+        ])
         return checks
 
     # --- Task 18.1: Receipt Expense as Voucher (German) ---
     dept_name_18 = f"Markedsføring {uid}"
     receipt_amount_18 = 4950.0
-    receipt_vat_18 = 990.0  # 25% VAT included in 4950  # noqa: F841
+    receipt_vat_18 = 990.0  # 25% VAT included in 4950
     receipt_ex_vat_18 = 3960.0
 
     def setup_task_18(client: httpx.Client) -> None:
@@ -1499,17 +1479,15 @@ def build_tasks() -> list[SyntheticTask]:
         resp.raise_for_status()
         print(f"  [setup] Created department '{dept_name_18}' (id={resp.json()['value']['id']})")
 
-    receipt_pdf_18 = _make_pdf(
-        [
-            "Elkjøp Bergen",
-            "Dato: 30.03.2026",
-            "",
-            "Tastatur Logitech MX Keys     4 950,00 NOK",
-            "  herav MVA 25%                  990,00 NOK",
-            "",
-            "Betalt med kort",
-        ],
-    )
+    receipt_pdf_18 = _make_pdf([
+        "Elkjøp Bergen",
+        "Dato: 30.03.2026",
+        "",
+        "Tastatur Logitech MX Keys     4 950,00 NOK",
+        "  herav MVA 25%                  990,00 NOK",
+        "",
+        "Betalt med kort",
+    ])
 
     def verify_task_18(client: httpx.Client) -> list[VerifyCheck]:
         checks: list[VerifyCheck] = []
@@ -1531,7 +1509,7 @@ def build_tasks() -> list[SyntheticTask]:
                 "no_travel_expense",
                 len(travel_exps) == 0,
                 f"Found {len(travel_exps)} travel expenses — keyboard purchase should be a voucher, not travel",
-            ),
+            )
         )
 
         # Check that a voucher was created with a posting to an expense account (6xxx range)
@@ -1544,32 +1522,23 @@ def build_tasks() -> list[SyntheticTask]:
                 "dateTo": (today + timedelta(days=60)).isoformat(),
                 "departmentId": dept_id,
                 "count": 100,
-                "fields": (
-                    "id,account(number,name),amountGross,amountGrossCurrency,voucher(id,description)"
-                ),
+                "fields": "id,account(number,name),amountGross,amountGrossCurrency,voucher(id,description)",
             },
         )
         postings = resp.json().get("values", [])
         # Look for a debit to a 6xxx expense account
         expense_postings = [
-            p
-            for p in postings
+            p for p in postings
             if 6000 <= (p.get("account", {}).get("number") or 0) < 7000
             and (p.get("amountGross") or 0) > 0
         ]
         if not expense_postings:
             checks.append(
-                (
-                    "voucher_expense_posting",
-                    False,
-                    "No debit posting to 6xxx expense account in department",
-                ),
+                ("voucher_expense_posting", False, "No debit posting to 6xxx expense account in department")
             )
             return checks
 
-        checks.append(
-            ("voucher_expense_posting", True, f"Found {len(expense_postings)} expense posting(s)"),
-        )
+        checks.append(("voucher_expense_posting", True, f"Found {len(expense_postings)} expense posting(s)"))
 
         # Check amount — the gross amount on the expense posting should relate to receipt total
         # With 25% VAT, the gross amount could be 4950 (inc VAT) or 3960 (ex VAT) depending on
@@ -1582,7 +1551,7 @@ def build_tasks() -> list[SyntheticTask]:
                 "correct_amount",
                 amount_ok,
                 f"expense posting amountGross={gross}, expected ~{receipt_amount_18} (incl VAT) or ~{receipt_ex_vat_18} (excl VAT)",
-            ),
+            )
         )
 
         return checks
@@ -1631,11 +1600,7 @@ def build_tasks() -> list[SyntheticTask]:
 
         if not target:
             return [
-                (
-                    "voucher_exists",
-                    False,
-                    f"No voucher with 2400+6540 postings among {len(vouchers)} vouchers",
-                ),
+                ("voucher_exists", False, f"No voucher with 2400+6540 postings among {len(vouchers)} vouchers"),
             ]
 
         checks: list[VerifyCheck] = [
@@ -1774,14 +1739,14 @@ def build_tasks() -> list[SyntheticTask]:
                 "payment_reversed",
                 outstanding > 0,
                 f"amountOutstanding={outstanding}, expected >0 (payment reversed)",
-            ),
+            )
         )
         checks.append(
             (
                 "amount_restored",
                 abs(outstanding - invoice_amount_19) < 1.0,
                 f"amountOutstanding={outstanding}, expected ~{invoice_amount_19}",
-            ),
+            )
         )
 
         # Ensure no credit note was created (wrong approach)
@@ -1791,7 +1756,7 @@ def build_tasks() -> list[SyntheticTask]:
                 "no_credit_note",
                 len(credit_notes) == 0,
                 f"Found {len(credit_notes)} credit notes — should reverse payment, not create credit note",
-            ),
+            )
         )
 
         return checks
@@ -1974,7 +1939,7 @@ def build_tasks() -> list[SyntheticTask]:
             "name": "14.1 Project + Timesheet 2 Employees (Norwegian)",
             "prompt": (
                 f'Opprett prosjektet "{proj_name_14}" (internt). '
-                f'Opprett aktiviteten "{activity_name_14}" og koble den til prosjektet. '
+                f"Opprett aktiviteten \"{activity_name_14}\" og koble den til prosjektet. "
                 f"Legg til {emp_first_14a} {emp_last_14a} ({emp_email_14a}) og "
                 f"{emp_first_14b} {emp_last_14b} ({emp_email_14b}) som deltakere. "
                 f"Registrer 8 timer for {emp_first_14a} og 5 timer for {emp_first_14b} "
