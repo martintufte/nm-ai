@@ -90,6 +90,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/**" = ["T201", "INP001"]
+"**/scripts/**" = ["T201", "INP001", "ANN", "PLC0415"]
+"compare_rules.py" = ["T201", "ANN"]
+"astar_island/fit.py" = ["T201"]
+"astar_island/predictor/rulesim.py" = ["N802", "N806"]
 "tripletex/scripts/run_synthetic_tasks.py" = ["T201"]
 "tripletex/scripts/tripletex_cli.py" = ["T201"]
 
@@ -98,3 +102,7 @@ convention = "google"
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.ty.rules]
+invalid-argument-type = "warn"
+unresolved-import = "warn"

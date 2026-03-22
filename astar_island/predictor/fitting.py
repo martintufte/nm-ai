@@ -32,7 +32,6 @@ FREE_CLASSES = 3
 FREE_IDX = [0, 1, 4]
 
 
-
 def softmax(x: NDArray[np.float64]) -> NDArray[np.float64]:
     """Softmax that maps unconstrained reals to a probability simplex."""
     e = np.exp(x - x.max())

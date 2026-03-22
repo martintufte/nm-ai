@@ -208,15 +208,15 @@ class InteractionDiffusionPredictor(IslandPredictor):
         base = pack_diffusion_params(self.priors, self.diffusion)
 
         # 3 interaction weights in logit space (0, 1)
-        weights = np.array([
-            logit(getattr(self.interactions, f)) for f in self._WEIGHT_FIELDS
-        ])
+        weights = np.array([logit(getattr(self.interactions, f)) for f in self._WEIGHT_FIELDS])
 
         # 3 interaction ranges in logit space (0, _RANGE_SCALE)
-        ranges = np.array([
-            logit(getattr(self.interactions, f), scale=self._RANGE_SCALE)
-            for f in self._RANGE_FIELDS
-        ])
+        ranges = np.array(
+            [
+                logit(getattr(self.interactions, f), scale=self._RANGE_SCALE)
+                for f in self._RANGE_FIELDS
+            ],
+        )
 
         return np.concatenate([base, weights, ranges])
 
@@ -256,16 +256,26 @@ class InteractionDiffusionPredictor(IslandPredictor):
 
         # 4. Interaction effects
         probs = apply_forest_reclamation(
-            probs, seed_state.forest_mask, static_mask,
-            ix.forest_reclaim_ruins, ix.forest_reclaim_range,
+            probs,
+            seed_state.forest_mask,
+            static_mask,
+            ix.forest_reclaim_ruins,
+            ix.forest_reclaim_range,
         )
         probs = apply_settlement_rebuild(
-            probs, seed_state.settlement_mask, seed_state.coastal_mask, static_mask,
-            ix.settlement_rebuild_ruins, ix.settlement_rebuild_range,
+            probs,
+            seed_state.settlement_mask,
+            seed_state.coastal_mask,
+            static_mask,
+            ix.settlement_rebuild_ruins,
+            ix.settlement_rebuild_range,
         )
         probs = apply_port_trade_resilience(
-            probs, seed_state.coastal_mask, static_mask,
-            ix.port_trade_resilience, ix.port_trade_range,
+            probs,
+            seed_state.coastal_mask,
+            static_mask,
+            ix.port_trade_resilience,
+            ix.port_trade_range,
         )
 
         # 5. Port conversion

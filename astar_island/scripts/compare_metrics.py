@@ -12,15 +12,14 @@ import numpy as np
 from scipy.optimize import minimize
 
 from astar_island.fetch_data import load_round
-from astar_island.fit import (
-    build_rules,
-    default_params,
-    params_to_vector,
-    vector_to_params,
-    PARAM_NAMES,
-)
-from astar_island.predictor.rulesim import RuleSimulator, StaticMasks
+from astar_island.fit import PARAM_NAMES
+from astar_island.fit import build_rules
+from astar_island.fit import default_params
+from astar_island.fit import params_to_vector
+from astar_island.fit import vector_to_params
 from astar_island.model import create_seed_state
+from astar_island.predictor.rulesim import RuleSimulator
+from astar_island.predictor.rulesim import StaticMasks
 
 
 def compute_ll(
@@ -37,7 +36,7 @@ def compute_ll(
     total_ll = 0.0
     eps = 1e-12
 
-    for raw_grids, gt in zip(raw_grids_list, gt_list):
+    for raw_grids, gt in zip(raw_grids_list, gt_list, strict=True):
         for seed_idx in range(raw_grids.shape[0]):
             raw_grid = raw_grids[seed_idx]
             seed_state = create_seed_state(seed_idx, raw_grid)
@@ -86,14 +85,15 @@ def fit_metric(
         p = vector_to_params(x)
         ll = compute_ll(p, raw_grids_list, gt_list, metric, n_realizations)
         call_count += 1
-        if ll > best_so_far[0]:
-            best_so_far[0] = ll
+        best_so_far[0] = max(best_so_far[0], ll)
         if call_count % 5 == 0:
             print(f"    eval {call_count:4d}  LL={ll:.2f}  best={best_so_far[0]:.2f}", flush=True)
         return -ll
 
     result = minimize(
-        objective, x0, method="Nelder-Mead",
+        objective,
+        x0,
+        method="Nelder-Mead",
         options={"maxiter": maxiter, "xatol": 1e-4, "fatol": 0.5, "adaptive": True},
     )
 
@@ -111,7 +111,7 @@ def main() -> None:
     all_rounds = list(range(1, 17))
     print(f"Loading fit data (rounds {fit_rounds})...")
     fit_grids, fit_gt = load_data(fit_rounds)
-    print(f"Loading eval data (all rounds)...")
+    print("Loading eval data (all rounds)...")
     all_grids, all_gt = load_data(all_rounds)
 
     n_fit_seeds = sum(g.shape[0] for g in fit_grids)
@@ -140,7 +140,7 @@ def main() -> None:
 
         print(f"  Full eval LL: {full_ll:.2f}")
         print(f"  Time: fit={fit_time:.0f}s, eval={eval_time:.0f}s")
-        for name, val in zip(PARAM_NAMES, best_p):
+        for name, val in zip(PARAM_NAMES, best_p, strict=True):
             print(f"    {name:25s} = {val:.6f}")
         print()
 

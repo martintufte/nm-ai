@@ -26,7 +26,6 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 
-from astar_island.client import N_CLASSES
 from astar_island.fetch_data import load_round
 from astar_island.model import RAW_VALUE_TO_CLASS
 from astar_island.model import create_seed_state
@@ -120,17 +119,19 @@ def params_to_vector(params: list[float]) -> NDArray[np.float64]:
     p/a values use logit (constrained to (0,1)).
     b values use inv_softplus (constrained to (0,inf)).
     """
-    return np.array([
-        _logit(v) if t == "p" else _inv_softplus(v)
-        for t, v in zip(_PARAM_TYPES, params)
-    ])
+    return np.array(
+        [
+            _logit(v) if t == "p" else _inv_softplus(v)
+            for t, v in zip(_PARAM_TYPES, params, strict=True)
+        ],
+    )
 
 
 def vector_to_params(x: NDArray[np.float64]) -> list[float]:
     """Convert unconstrained vector back to rule parameters."""
     return [
         float(_sigmoid(xi)) if t == "p" else float(_softplus(xi))
-        for t, xi in zip(_PARAM_TYPES, x)
+        for t, xi in zip(_PARAM_TYPES, x, strict=True)
     ]
 
 
@@ -159,17 +160,22 @@ def default_params() -> list[float]:
     ptr = PlainsToRuin()
     ftr = ForestToRuin()
     return [
-        rtf.a, rtf.b,
+        rtf.a,
+        rtf.b,
         SettlementToRuin().p,
         RuinToSettlement().p,
         RuinToPlains().p,
         PortToRuin().p,
         SettlementToPort().p,
         RuinToPort().p,
-        pts.a, pts.b,
-        fts.a, fts.b,
-        ptr.a, ptr.b,
-        ftr.a, ftr.b,
+        pts.a,
+        pts.b,
+        fts.a,
+        fts.b,
+        ptr.a,
+        ptr.b,
+        ftr.a,
+        ftr.b,
     ]
 
 
@@ -252,12 +258,14 @@ class FitData:
                     for raw_val, cls_idx in RAW_VALUE_TO_CLASS.items():
                         obs_classes[vp.grid == raw_val] = cls_idx
 
-                    round_samples.append(ViewportSample(
-                        seed_index=seed_idx,
-                        viewport_x=vp.viewport_x,
-                        viewport_y=vp.viewport_y,
-                        observed_classes=obs_classes,
-                    ))
+                    round_samples.append(
+                        ViewportSample(
+                            seed_index=seed_idx,
+                            viewport_x=vp.viewport_x,
+                            viewport_y=vp.viewport_y,
+                            observed_classes=obs_classes,
+                        ),
+                    )
 
             samples_list.append(round_samples)
 
@@ -323,7 +331,8 @@ def log_likelihood(
             # Skip static cells (water/mountain) — they're deterministic and don't
             # depend on rule parameters, so they just add a constant to LL
             raw_region = fit_data.raw_grids[round_idx][sample.seed_index][
-                vy : vy + vh, vx : vx + vw
+                vy : vy + vh,
+                vx : vx + vw,
             ]
             dynamic = (raw_region != 10) & (raw_region != 5)
 
@@ -369,7 +378,7 @@ def fit(
     LOGGER.info("Initial LL: %.2f  params: %s", init_ll, init_p)
     if verbose:
         print(f"Initial LL: {init_ll:.2f}")
-        print(f"Initial params: {dict(zip(PARAM_NAMES, init_p))}")
+        print(f"Initial params: {dict(zip(PARAM_NAMES, init_p, strict=True))}")
 
     call_count = 0
     best_so_far = [init_ll]
@@ -380,8 +389,7 @@ def fit(
         ll = log_likelihood(p, fit_data, n_realizations, n_years, rng_seed, metric=metric)
         call_count += 1
 
-        if ll > best_so_far[0]:
-            best_so_far[0] = ll
+        best_so_far[0] = max(best_so_far[0], ll)
 
         if verbose and call_count % 5 == 0:
             print(f"  eval {call_count:4d}  LL={ll:.2f}  best={best_so_far[0]:.2f}")
@@ -408,7 +416,7 @@ def fit(
 def print_params(params: list[float]) -> None:
     """Pretty-print fitted rule parameters."""
     print("\nFitted rule parameters:")
-    for name, p in zip(PARAM_NAMES, params):
+    for name, p in zip(PARAM_NAMES, params, strict=True):
         print(f"  {name:25s}  p={p:.6f}")
 
 
@@ -430,7 +438,7 @@ def save_result(
         "n_years": n_years,
         "rounds": fit_data.round_numbers,
         "n_viewport_samples": sum(len(s) for s in fit_data.samples),
-        "params": dict(zip(PARAM_NAMES, params)),
+        "params": dict(zip(PARAM_NAMES, params, strict=True)),
     }
 
     path = out_dir / "fit_result.json"
@@ -456,20 +464,38 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Fit rule parameters to viewport samples")
     parser.add_argument("--rounds", default="1-16", help="Rounds to fit on (e.g. 1-16)")
-    parser.add_argument("--n-realizations", type=int, default=1000, help="MC realizations (default: 1000)")
+    parser.add_argument(
+        "--n-realizations",
+        type=int,
+        default=1000,
+        help="MC realizations (default: 1000)",
+    )
     parser.add_argument("--n-years", type=int, default=50, help="Simulation steps (default: 50)")
-    parser.add_argument("--n-viewports", type=int, default=10, help="Viewports per seed (default: 10)")
+    parser.add_argument(
+        "--n-viewports",
+        type=int,
+        default=10,
+        help="Viewports per seed (default: 10)",
+    )
     parser.add_argument("--method", default="Nelder-Mead", help="Optimization method")
     parser.add_argument("--maxiter", type=int, default=300, help="Max iterations (default: 300)")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed (default: 42)")
-    parser.add_argument("--metric", default="manhattan", choices=["manhattan", "chebyshev"],
-                        help="Distance metric for kernel rules (default: manhattan)")
+    parser.add_argument(
+        "--metric",
+        default="manhattan",
+        choices=["manhattan", "chebyshev"],
+        help="Distance metric for kernel rules (default: manhattan)",
+    )
     args = parser.parse_args()
 
     rounds = _parse_rounds(args.rounds)
 
     print(f"Loading data and sampling viewports... (metric={args.metric})")
-    fit_data = FitData.from_rounds(rounds, n_viewports_per_seed=args.n_viewports, rng_seed=args.seed)
+    fit_data = FitData.from_rounds(
+        rounds,
+        n_viewports_per_seed=args.n_viewports,
+        rng_seed=args.seed,
+    )
 
     best_p, best_ll = fit(
         fit_data,

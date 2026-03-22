@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import time
 
-from astar_island.predictor.rule_eval import ReplayCorpus, evaluate_rule
+from astar_island.predictor.rule_eval import ReplayCorpus
+from astar_island.predictor.rule_eval import evaluate_rule
 from astar_island.predictor.rulesim import KernelSpawnRule
 
 # Spatial transitions to test: (old_raw, new_raw, source_raw, description)
@@ -43,7 +44,7 @@ def main() -> None:
         print(
             f"{'metric':<12s} {'max_d':>5s} {'feasible':>8s} {'p_mle':>10s} "
             f"{'CI_low':>10s} {'CI_high':>10s} {'CI_width':>10s} "
-            f"{'n_elig':>10s} {'n_fired':>8s} {'time':>6s}"
+            f"{'n_elig':>10s} {'n_fired':>8s} {'time':>6s}",
         )
         print("-" * 100)
 
@@ -70,11 +71,13 @@ def main() -> None:
 
                 if fit is not None:
                     ci_width = fit.ci_high - fit.ci_low
-                    results.append((metric, max_dist, fit.p_mle, ci_width, fit.n_eligible, fit.n_fired))
+                    results.append(
+                        (metric, max_dist, fit.p_mle, ci_width, fit.n_eligible, fit.n_fired),
+                    )
                     print(
                         f"{metric:<12s} {max_dist:>5d} {'YES':>8s} {fit.p_mle:>10.6f} "
                         f"{fit.ci_low:>10.6f} {fit.ci_high:>10.6f} {ci_width:>10.6f} "
-                        f"{fit.n_eligible:>10d} {fit.n_fired:>8d} {elapsed:>5.1f}s"
+                        f"{fit.n_eligible:>10d} {fit.n_fired:>8d} {elapsed:>5.1f}s",
                     )
                 else:
                     n_imp = f.n_impossible
@@ -83,17 +86,21 @@ def main() -> None:
                         f"{metric:<12s} {max_dist:>5d} {'NO':>8s} {'':>10s} "
                         f"{'':>10s} {'':>10s} {'':>10s} "
                         f"{f.n_eligible_cells:>10d} {'':>8s} {elapsed:>5.1f}s"
-                        f"  ({n_imp} impossible)"
+                        f"  ({n_imp} impossible)",
                     )
 
         # Find best: highest n_fired with tightest CI among feasible
-        feasible = [(m, d, p, ci, ne, nf) for m, d, p, ci, ne, nf in results if p is not None and nf > 0]
+        feasible = [
+            (m, d, p, ci, ne, nf) for m, d, p, ci, ne, nf in results if p is not None and nf > 0
+        ]
         if feasible:
             # Best = tightest CI (relative to p_mle), filtering for reliable (n_fired >= 10)
             reliable = [r for r in feasible if r[5] >= 10]
             if reliable:
                 best = min(reliable, key=lambda r: r[3])  # tightest CI
-                print(f"\n  Best: metric={best[0]}, max_dist={best[1]}, p_mle={best[2]:.6f}, CI_width={best[3]:.6f}")
+                print(
+                    f"\n  Best: metric={best[0]}, max_dist={best[1]}, p_mle={best[2]:.6f}, CI_width={best[3]:.6f}",
+                )
             else:
                 print("\n  No reliable fits (all n_fired < 10)")
 

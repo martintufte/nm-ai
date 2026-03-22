@@ -14,22 +14,21 @@ from pathlib import Path
 import numpy as np
 
 from astar_island.model import create_seed_state
-from astar_island.predictor.rulesim import (
-    LongboatForestToRuin,
-    LongboatForestToSettlement,
-    LongboatPlainsToRuin,
-    LongboatPlainsToSettlement,
-    LongboatRuinToPort,
-    LongboatSettlementToPort,
-    PortToRuin,
-    RuleSimPredictor,
-    RuleSimulator,
-    RuinToForest,
-    RuinToPlains,
-    RuinToSettlement,
-    SettlementToRuin,
-    StaticMasks,
-)
+from astar_island.predictor.rulesim import LongboatForestToRuin
+from astar_island.predictor.rulesim import LongboatForestToSettlement
+from astar_island.predictor.rulesim import LongboatPlainsToRuin
+from astar_island.predictor.rulesim import LongboatPlainsToSettlement
+from astar_island.predictor.rulesim import LongboatRuinToPort
+from astar_island.predictor.rulesim import LongboatSettlementToPort
+from astar_island.predictor.rulesim import PortToRuin
+from astar_island.predictor.rulesim import RuinToForest
+from astar_island.predictor.rulesim import RuinToPlains
+from astar_island.predictor.rulesim import RuinToSettlement
+from astar_island.predictor.rulesim import Rule
+from astar_island.predictor.rulesim import RuleSimPredictor
+from astar_island.predictor.rulesim import RuleSimulator
+from astar_island.predictor.rulesim import SettlementToRuin
+from astar_island.predictor.rulesim import StaticMasks
 from astar_island.replay import Replay
 
 
@@ -51,9 +50,12 @@ def profile_per_rule(grid: np.ndarray, static: StaticMasks) -> None:
     """Time each rule individually across the full simulation."""
     predictor = RuleSimPredictor()
     rules = predictor.rules
-    sim = RuleSimulator(rules=rules, n_realizations=predictor.n_realizations, n_years=predictor.n_years)
+    sim = RuleSimulator(
+        rules=rules,
+        n_realizations=predictor.n_realizations,
+        n_years=predictor.n_years,
+    )
 
-    rng = np.random.default_rng(42)
     h, w = grid.shape
     from astar_island.predictor.rulesim import _raw_grid_to_class_grid
 
@@ -90,7 +92,9 @@ def profile_per_rule(grid: np.ndarray, static: StaticMasks) -> None:
     print(f"{'Rule':<30s}  {'Time (s)':>10s}  {'% of rules':>10s}  {'ms/step':>10s}")
     print("-" * 65)
     for name, t in sorted(rule_times.items(), key=lambda x: -x[1]):
-        print(f"{name:<30s}  {t:10.3f}  {100 * t / total_rule_time:9.1f}%  {1000 * t / sim.n_years:10.2f}")
+        print(
+            f"{name:<30s}  {t:10.3f}  {100 * t / total_rule_time:9.1f}%  {1000 * t / sim.n_years:10.2f}",
+        )
     print("-" * 65)
     print(f"{'TOTAL':<30s}  {total_rule_time:10.3f}")
 
@@ -98,7 +102,11 @@ def profile_per_rule(grid: np.ndarray, static: StaticMasks) -> None:
 def profile_cprofile(grid: np.ndarray, static: StaticMasks) -> None:
     """Run under cProfile for function-level breakdown."""
     predictor = RuleSimPredictor()
-    sim = RuleSimulator(rules=predictor.rules, n_realizations=predictor.n_realizations, n_years=predictor.n_years)
+    sim = RuleSimulator(
+        rules=predictor.rules,
+        n_realizations=predictor.n_realizations,
+        n_years=predictor.n_years,
+    )
 
     profiler = cProfile.Profile()
     profiler.enable()
@@ -117,7 +125,7 @@ def profile_cprofile(grid: np.ndarray, static: StaticMasks) -> None:
 
 def profile_longboat(grid: np.ndarray, static: StaticMasks) -> None:
     """Profile with Longboat (water-boosted) rules."""
-    rules = [
+    rules: list[Rule] = [
         RuinToForest(),
         SettlementToRuin(),
         RuinToSettlement(),
@@ -161,7 +169,9 @@ def profile_longboat(grid: np.ndarray, static: StaticMasks) -> None:
     print(f"{'Rule':<50s}  {'Time (s)':>10s}  {'% of rules':>10s}  {'ms/step':>10s}")
     print("-" * 85)
     for name, t in sorted(rule_times.items(), key=lambda x: -x[1]):
-        print(f"{name:<50s}  {t:10.3f}  {100 * t / total_rule_time:9.1f}%  {1000 * t / sim.n_years:10.2f}")
+        print(
+            f"{name:<50s}  {t:10.3f}  {100 * t / total_rule_time:9.1f}%  {1000 * t / sim.n_years:10.2f}",
+        )
     print("-" * 85)
     print(f"{'TOTAL':<50s}  {total_rule_time:10.3f}")
 

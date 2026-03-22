@@ -10,9 +10,9 @@ import numpy as np
 from scipy import stats
 
 from astar_island.predictor.rulesim import Rule
+from astar_island.replay import TILE_NAMES
 from astar_island.replay import CellTransition
 from astar_island.replay import Replay
-from astar_island.replay import TILE_NAMES
 
 
 @dataclass
@@ -111,19 +111,18 @@ class RuleEvalReport:
         status = "PASS" if f.is_feasible else f"WARN ({f.n_impossible} impossible)"
         lines.append(
             f"Feasibility: {status}  "
-            f"(described={f.n_described}, possible={f.n_possible}, impossible={f.n_impossible})"
+            f"(described={f.n_described}, possible={f.n_possible}, impossible={f.n_impossible})",
         )
         if f.empirical_rate is not None:
             lines.append(
                 f"  eligible_cells={f.n_eligible_cells}, fired={f.n_actually_fired}, "
-                f"empirical_rate={f.empirical_rate:.6f}"
+                f"empirical_rate={f.empirical_rate:.6f}",
             )
         if not f.is_feasible:
-            for ex in f.impossible_examples[:5]:
-                lines.append(
-                    f"  impossible: {ex.replay_id} step={ex.step} "
-                    f"({ex.x},{ex.y}): {ex.detail}"
-                )
+            lines.extend(
+                f"  impossible: {ex.replay_id} step={ex.step} ({ex.x},{ex.y}): {ex.detail}"
+                for ex in f.impossible_examples[:5]
+            )
             if len(f.impossible_examples) > 5:
                 lines.append(f"  ... and {len(f.impossible_examples) - 5} more")
         if self.fit is not None:
@@ -142,10 +141,7 @@ def check_feasibility(rule: Rule, corpus: ReplayCorpus) -> FeasibilityResult:
         prev_grid = replay.frames[frame_idx - 1].grid
 
         # Filter transitions this rule describes
-        described = [
-            t for t in transitions
-            if rule.describes_transition(t.old_name, t.new_name)
-        ]
+        described = [t for t in transitions if rule.describes_transition(t.old_name, t.new_name)]
         result.n_described += len(described)
 
         # Check possibility
@@ -155,13 +151,15 @@ def check_feasibility(rule: Rule, corpus: ReplayCorpus) -> FeasibilityResult:
             else:
                 result.n_impossible += 1
                 if len(result.impossible_examples) < 20:
-                    result.impossible_examples.append(ImpossibleExample(
-                        replay_id=replay.round_id,
-                        step=t.step,
-                        x=t.x,
-                        y=t.y,
-                        detail=f"cell was {_raw_name(prev_grid[t.y, t.x])}",
-                    ))
+                    result.impossible_examples.append(
+                        ImpossibleExample(
+                            replay_id=replay.round_id,
+                            step=t.step,
+                            x=t.x,
+                            y=t.y,
+                            detail=f"cell was {_raw_name(prev_grid[t.y, t.x])}",
+                        ),
+                    )
 
         # Eligible mask counting
         eligible = rule.eligible_mask(prev_grid)
@@ -191,10 +189,7 @@ def fit_rule_probability(rule: Rule, corpus: ReplayCorpus) -> FitResult:
         eligible = rule.eligible_mask(prev_grid)
         n_eligible = int(eligible.sum())
 
-        described = [
-            t for t in transitions
-            if rule.describes_transition(t.old_name, t.new_name)
-        ]
+        described = [t for t in transitions if rule.describes_transition(t.old_name, t.new_name)]
         fired_mask = np.zeros_like(eligible)
         for t in described:
             if eligible[t.y, t.x]:

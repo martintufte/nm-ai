@@ -24,15 +24,15 @@ CORNERS = [(1, 1), (1, 24), (24, 1), (24, 24)]
 
 # Edge definitions: (label, x_range, y_range) — one axis is fixed
 EDGES = [
-    ("top", range(9, 17), range(1, 2)),      # y=1, x varies
+    ("top", range(9, 17), range(1, 2)),  # y=1, x varies
     ("bottom", range(9, 17), range(24, 25)),  # y=24, x varies
-    ("left", range(1, 2), range(9, 17)),      # x=1, y varies
-    ("right", range(24, 25), range(9, 17)),   # x=24, y varies
+    ("left", range(1, 2), range(9, 17)),  # x=1, y varies
+    ("right", range(24, 25), range(9, 17)),  # x=24, y varies
 ]
 
 # Search ranges
 CENTER_RANGE = range(9, 17)  # [9, 16] inclusive
-FLEX_RANGE = range(3, 22)    # [3, 21] inclusive
+FLEX_RANGE = range(3, 22)  # [3, 21] inclusive
 
 
 def _viewport_score(
@@ -177,7 +177,11 @@ class QuerySelector:
         if not self._center_done[seed]:
             self._center_done[seed] = True
             x, y = _best_position(
-                grid, changed, counts, CENTER_RANGE, CENTER_RANGE,
+                grid,
+                changed,
+                counts,
+                CENTER_RANGE,
+                CENTER_RANGE,
             )
             return (seed, x, y)
 

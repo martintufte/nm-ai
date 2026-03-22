@@ -15,31 +15,30 @@ import time
 import numpy as np
 from numpy.typing import NDArray
 
-from astar_island.model import IslandModel, RAW_VALUE_TO_CLASS, create_seed_state
-from astar_island.predictor.rulesim import (
-    ForestToRuin,
-    ForestToSettlement,
-    LongboatForestToRuin,
-    LongboatForestToSettlement,
-    LongboatPlainsToRuin,
-    LongboatPlainsToSettlement,
-    LongboatRuinToPort,
-    LongboatSettlementToPort,
-    PlainsToRuin,
-    PlainsToSettlement,
-    PortToRuin,
-    Rule,
-    RuleSimPredictor,
-    RuleSimulator,
-    RuinToForest,
-    RuinToPlains,
-    RuinToPort,
-    RuinToSettlement,
-    SettlementToPort,
-    SettlementToRuin,
-    StaticMasks,
-)
-from astar_island.query_selector import select_queries
+from astar_island.model import RAW_VALUE_TO_CLASS
+from astar_island.model import IslandModel
+from astar_island.model import create_seed_state
+from astar_island.predictor.rulesim import ForestToRuin
+from astar_island.predictor.rulesim import ForestToSettlement
+from astar_island.predictor.rulesim import LongboatForestToRuin
+from astar_island.predictor.rulesim import LongboatForestToSettlement
+from astar_island.predictor.rulesim import LongboatPlainsToRuin
+from astar_island.predictor.rulesim import LongboatPlainsToSettlement
+from astar_island.predictor.rulesim import LongboatRuinToPort
+from astar_island.predictor.rulesim import LongboatSettlementToPort
+from astar_island.predictor.rulesim import PlainsToRuin
+from astar_island.predictor.rulesim import PlainsToSettlement
+from astar_island.predictor.rulesim import PortToRuin
+from astar_island.predictor.rulesim import RuinToForest
+from astar_island.predictor.rulesim import RuinToPlains
+from astar_island.predictor.rulesim import RuinToPort
+from astar_island.predictor.rulesim import RuinToSettlement
+from astar_island.predictor.rulesim import Rule
+from astar_island.predictor.rulesim import RuleSimPredictor
+from astar_island.predictor.rulesim import RuleSimulator
+from astar_island.predictor.rulesim import SettlementToPort
+from astar_island.predictor.rulesim import SettlementToRuin
+from astar_island.predictor.rulesim import StaticMasks
 from astar_island.simulator import AstarIslandSimulator
 
 N_REAL = int(sys.argv[1]) if len(sys.argv) > 1 else 500
@@ -48,30 +47,74 @@ N_SEARCH = min(N_REAL, 150)  # fewer realizations for grid search
 
 def baseline_rules() -> list[Rule]:
     return [
-        RuinToForest(), SettlementToRuin(), RuinToSettlement(), RuinToPlains(),
-        SettlementToPort(), RuinToPort(), PortToRuin(),
-        PlainsToSettlement(), ForestToSettlement(), PlainsToRuin(), ForestToRuin(),
+        RuinToForest(),
+        SettlementToRuin(),
+        RuinToSettlement(),
+        RuinToPlains(),
+        SettlementToPort(),
+        RuinToPort(),
+        PortToRuin(),
+        PlainsToSettlement(),
+        ForestToSettlement(),
+        PlainsToRuin(),
+        ForestToRuin(),
     ]
 
 
-def longboat_rules(a_water: float, b_water: float, connectivity: int = 8, max_dist_water: int = 15) -> list[Rule]:
+def longboat_rules(
+    a_water: float,
+    b_water: float,
+    connectivity: int = 8,
+    max_dist_water: int = 15,
+) -> list[Rule]:
     """Build longboat rules with shared water kernel params."""
     return [
-        LongboatPlainsToSettlement(a_water=a_water, b_water=b_water, connectivity=connectivity, max_dist_water=max_dist_water),
-        LongboatForestToSettlement(a_water=a_water, b_water=b_water, connectivity=connectivity, max_dist_water=max_dist_water),
-        LongboatPlainsToRuin(a_water=a_water * 0.5, b_water=b_water, connectivity=connectivity, max_dist_water=max_dist_water),
-        LongboatForestToRuin(a_water=a_water * 0.5, b_water=b_water, connectivity=connectivity, max_dist_water=max_dist_water),
-        LongboatSettlementToPort(a_water=a_water * 2, b_water=b_water * 0.7, connectivity=connectivity, max_dist_water=max_dist_water),
-        LongboatRuinToPort(a_water=a_water * 2, b_water=b_water * 0.7, connectivity=connectivity, max_dist_water=max_dist_water),
+        LongboatPlainsToSettlement(
+            a_water=a_water,
+            b_water=b_water,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
+        LongboatForestToSettlement(
+            a_water=a_water,
+            b_water=b_water,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
+        LongboatPlainsToRuin(
+            a_water=a_water * 0.5,
+            b_water=b_water,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
+        LongboatForestToRuin(
+            a_water=a_water * 0.5,
+            b_water=b_water,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
+        LongboatSettlementToPort(
+            a_water=a_water * 2,
+            b_water=b_water * 0.7,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
+        LongboatRuinToPort(
+            a_water=a_water * 2,
+            b_water=b_water * 0.7,
+            connectivity=connectivity,
+            max_dist_water=max_dist_water,
+        ),
     ]
 
 
 def collect_viewports(sim: AstarIslandSimulator, rd, model: IslandModel, n_queries: int = 50):
     """Collect viewport observations using query selector."""
-    queries = select_queries(model)[:n_queries]
     viewports = []
-    for seed_idx, x, y in queries:
+    for _ in range(n_queries):
+        seed_idx, x, y = model.select_query()
         vp = sim.simulate(sim.round_id, seed_idx, x, y)
+        model.update(vp)
         viewports.append(vp)
     return viewports
 
@@ -101,9 +144,9 @@ def viewport_ll(
         probs = probs_cache[vp.seed_index]
         vx, vy = vp.viewport_x, vp.viewport_y
         vh, vw = vp.viewport_h, vp.viewport_w
-        region_probs = probs[vy:vy + vh, vx:vx + vw]
+        region_probs = probs[vy : vy + vh, vx : vx + vw]
 
-        raw_region = raw_grids[vp.seed_index][vy:vy + vh, vx:vx + vw]
+        raw_region = raw_grids[vp.seed_index][vy : vy + vh, vx : vx + vw]
         dynamic = (raw_region != 10) & (raw_region != 5)
 
         obs_classes = np.zeros_like(vp.grid, dtype=np.int8)
@@ -130,10 +173,17 @@ def fit_longboat_params(
     """
     # Focused grid: small a_water + a few b_water values
     grid = [
-        (0.001, 0.05), (0.001, 0.15), (0.001, 0.30),
-        (0.003, 0.05), (0.003, 0.15), (0.003, 0.30),
-        (0.008, 0.10), (0.008, 0.20), (0.008, 0.35),
-        (0.015, 0.15), (0.015, 0.30),
+        (0.001, 0.05),
+        (0.001, 0.15),
+        (0.001, 0.30),
+        (0.003, 0.05),
+        (0.003, 0.15),
+        (0.003, 0.30),
+        (0.008, 0.10),
+        (0.008, 0.20),
+        (0.008, 0.35),
+        (0.015, 0.15),
+        (0.015, 0.30),
     ]
 
     base_ll = viewport_ll(baseline_rules(), viewports, raw_grids, seed_states, N_SEARCH)
@@ -168,14 +218,17 @@ def main():
         rd = sim.get_round(sim.round_id)
 
         # Collect viewports for fitting
-        base_model = IslandModel.from_round_data(rd, RuleSimPredictor(rules=baseline_rules(), n_realizations=100))
+        base_model = IslandModel.from_round_data(
+            rd,
+            RuleSimPredictor(rules=baseline_rules(), n_realizations=100),
+        )
         viewports = collect_viewports(sim, rd, base_model, n_queries=50)
 
         raw_grids = [sd.grid for sd in rd.seeds]
         seed_states = [create_seed_state(i, sd.grid) for i, sd in enumerate(rd.seeds)]
 
         # Fit longboat params via grid search
-        a_w, b_w, fitted_ll = fit_longboat_params(viewports, raw_grids, seed_states)
+        a_w, b_w, _fitted_ll = fit_longboat_params(viewports, raw_grids, seed_states)
         print(f"  best: a_water={a_w:.4f}  b_water={b_w:.4f}", flush=True)
 
         # Score both configs at full realizations
@@ -188,19 +241,31 @@ def main():
 
         delta = fitted_score - base_score
         elapsed = time.time() - t_round
-        print(f"  baseline={base_score:.1f}  longboat={fitted_score:.1f}  delta={delta:+.1f}  ({elapsed:.0f}s)\n", flush=True)
+        print(
+            f"  baseline={base_score:.1f}  longboat={fitted_score:.1f}  delta={delta:+.1f}  ({elapsed:.0f}s)\n",
+            flush=True,
+        )
 
-        results.append({
-            "round": rnd, "base_score": base_score, "fitted_score": fitted_score,
-            "a_water": a_w, "b_water": b_w,
-        })
+        results.append(
+            {
+                "round": rnd,
+                "base_score": base_score,
+                "fitted_score": fitted_score,
+                "a_water": a_w,
+                "b_water": b_w,
+            },
+        )
 
     # Summary
-    print(f"\n{'Rnd':>3}  {'Base':>6}  {'Longboat':>8}  {'Delta':>6}  {'a_water':>8}  {'b_water':>8}")
+    print(
+        f"\n{'Rnd':>3}  {'Base':>6}  {'Longboat':>8}  {'Delta':>6}  {'a_water':>8}  {'b_water':>8}",
+    )
     print("-" * 55)
     for r in results:
         delta = r["fitted_score"] - r["base_score"]
-        print(f"{r['round']:>3}  {r['base_score']:>6.1f}  {r['fitted_score']:>8.1f}  {delta:>+6.1f}  {r['a_water']:>8.4f}  {r['b_water']:>8.4f}")
+        print(
+            f"{r['round']:>3}  {r['base_score']:>6.1f}  {r['fitted_score']:>8.1f}  {delta:>+6.1f}  {r['a_water']:>8.4f}  {r['b_water']:>8.4f}",
+        )
     base_avg = np.mean([r["base_score"] for r in results])
     fit_avg = np.mean([r["fitted_score"] for r in results])
     print(f"{'Avg':>3}  {base_avg:>6.1f}  {fit_avg:>8.1f}  {fit_avg - base_avg:>+6.1f}")
