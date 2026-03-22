@@ -113,8 +113,10 @@ def convert_coco_to_yolo(
         val_ids = set(image_ids[:val_count])
         train_ids = set(image_ids[val_count:])
     elif train_ids is None:
+        assert val_ids is not None
         train_ids = set(image_ids) - val_ids
     elif val_ids is None:
+        assert train_ids is not None
         val_ids = set(image_ids) - train_ids
     else:
         # Ensure we only reference known IDs
@@ -131,7 +133,10 @@ def convert_coco_to_yolo(
         train_ids |= missing
     overlap = train_ids & val_ids
     if overlap:
-        LOGGER.warning("train/val split overlap detected for %d images; assigning to train", len(overlap))
+        LOGGER.warning(
+            "train/val split overlap detected for %d images; assigning to train",
+            len(overlap),
+        )
         val_ids -= overlap
 
     # Create directory structure

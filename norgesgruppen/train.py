@@ -40,7 +40,7 @@ RUNS_DIR = Path(__file__).parent / "runs"
 
 
 @contextmanager
-def working_directory(path: Path) -> Generator[None, Any, None]:
+def working_directory(path: Path) -> Generator[None, Any]:
     """Temporarily switch cwd so Ultralytics side-effect downloads stay contained."""
     previous = Path.cwd()
     os.chdir(path)

@@ -1,30 +1,16 @@
-"""Astar Island API client.
+"""Astar Island API client."""
 
-Handles all communication with the Astar Island competition API.
-
-Usage:
-    client = AstarIslandClient(token="your_jwt_token")
-    rounds = client.get_rounds()
-    round_data = client.get_round(round_id=1)
-    budget = client.get_budget()
-    observation = client.simulate(round_id=1, seed_index=0, x=10, y=10)
-    client.submit(round_id=1, predictions=predictions_array)
-"""
+import time
+from dataclasses import dataclass
+from typing import Final
 
 import numpy as np
 import requests
 from numpy.typing import NDArray
 
-BASE_URL = "https://api.ainm.no/astar-island"
-
-MAP_SIZE = 40
-VIEWPORT_SIZE = 15
-NUM_SEEDS = 5
-NUM_CLASSES = 6
-QUERY_BUDGET = 50
-
-# Terrain class mapping
-TERRAIN_CLASSES = {
+BASE_URL: Final[str] = "https://api.ainm.no/astar-island"
+N_CLASSES: Final[int] = 6
+TERRAIN_CLASSES: Final[dict[int, str]] = {
     0: "Ocean/Plains/Empty",  # Static
     1: "Settlement",  # Dynamic
     2: "Port",  # Coastal settlements
@@ -32,6 +18,134 @@ TERRAIN_CLASSES = {
     4: "Forest",  # Reclaims abandoned land
     5: "Mountain",  # Permanent
 }
+
+
+@dataclass
+class Settlement:
+    """A settlement on the map."""
+
+    x: int
+    y: int
+    has_port: bool
+    alive: bool
+
+
+@dataclass
+class SeedData:
+    """Initial state for a single seed."""
+
+    grid: NDArray[np.int16]  # (H, W) raw grid values
+    settlements: list[Settlement]
+
+
+@dataclass
+class BudgetData:
+    """Parsed response from the get_budget API endpoint."""
+
+    round_id: str
+    queries_used: int
+    queries_max: int
+    active: bool
+
+    @property
+    def queries_remaining(self) -> int:
+        return self.queries_max - self.queries_used
+
+
+@dataclass
+class RoundData:
+    """Parsed response from the get_round API endpoint."""
+
+    id: str
+    round_number: int
+    status: str
+    map_width: int
+    map_height: int
+    seeds_count: int
+    seeds: list[SeedData]
+
+    @classmethod
+    def from_api(cls, data: dict) -> "RoundData":
+        """Parse the raw API JSON response into a RoundData."""
+        seeds = []
+        for state in data["initial_states"]:
+            grid = np.array(state["grid"], dtype=np.int16)
+            settlements = [
+                Settlement(
+                    x=s["x"],
+                    y=s["y"],
+                    has_port=s["has_port"],
+                    alive=s["alive"],
+                )
+                for s in state["settlements"]
+            ]
+            seeds.append(SeedData(grid=grid, settlements=settlements))
+
+        return cls(
+            id=data["id"],
+            round_number=data["round_number"],
+            status=data["status"],
+            map_width=data["map_width"],
+            map_height=data["map_height"],
+            seeds_count=data["seeds_count"],
+            seeds=seeds,
+        )
+
+
+@dataclass
+class ViewPortData:
+    """Parsed response from the simulate API endpoint."""
+
+    round_id: str
+    seed_index: int
+    viewport_x: int
+    viewport_y: int
+    viewport_w: int
+    viewport_h: int
+    grid: NDArray[np.int16]
+
+    @classmethod
+    def from_api(cls, data: dict, round_id: str, seed_index: int) -> "ViewPortData":
+        """Parse the raw API JSON response into ViewPortData."""
+        vp = data["viewport"]
+        grid = np.array(data["grid"], dtype=np.int16)
+        return cls(
+            round_id=round_id,
+            seed_index=seed_index,
+            viewport_x=vp["x"],
+            viewport_y=vp["y"],
+            viewport_w=vp["w"],
+            viewport_h=vp["h"],
+            grid=grid,
+        )
+
+
+@dataclass
+class AnalysisData:
+    """Parsed response from the get_analysis API endpoint."""
+
+    prediction: NDArray[np.float64]  # (H, W, 6)
+    ground_truth: NDArray[np.float64]  # (H, W, 6)
+    score: float | None
+    width: int
+    height: int
+    initial_grid: NDArray[np.int16] | None
+
+    @classmethod
+    def from_api(cls, data: dict) -> "AnalysisData":
+        """Parse the raw API JSON response into AnalysisData."""
+        initial_grid = None
+        if data.get("initial_grid") is not None:
+            initial_grid = np.array(data["initial_grid"], dtype=np.int16)
+
+        return cls(
+            prediction=np.array(data["prediction"], dtype=np.float64),
+            ground_truth=np.array(data["ground_truth"], dtype=np.float64),
+            score=data.get("score"),
+            width=data["width"],
+            height=data["height"],
+            initial_grid=initial_grid,
+        )
 
 
 class AstarIslandClient:
@@ -45,30 +159,39 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_round(self, round_id: str) -> dict:
+    def get_round(self, round_id: str) -> RoundData:
         """Get round details + initial map states."""
         resp = self.session.get(f"{BASE_URL}/rounds/{round_id}")
         resp.raise_for_status()
-        return resp.json()
+        return RoundData.from_api(resp.json())
 
-    def get_budget(self) -> dict:
+    def get_budget(self) -> BudgetData:
         """Get remaining query budget."""
         resp = self.session.get(f"{BASE_URL}/budget")
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        return BudgetData(
+            round_id=data["round_id"],
+            queries_used=data["queries_used"],
+            queries_max=data["queries_max"],
+            active=data["active"],
+        )
 
-    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> dict:
+    def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> ViewPortData:
         """Query a 15x15 viewport (costs 1 query).
+
+        Sleeps 250ms between calls to stay under the 5 req/sec rate limit.
 
         Args:
             round_id: The round to query
-            seed_index: Which seed (0-4) to observe
+            seed_index: Which seed to observe
             x: Top-left x coordinate of viewport
             y: Top-left y coordinate of viewport
 
         Returns:
-            Grid data, settlements list, viewport bounds.
+            ViewPortData with grid and viewport bounds.
         """
+        time.sleep(0.25)
         resp = self.session.post(
             f"{BASE_URL}/simulate",
             json={
@@ -79,24 +202,44 @@ class AstarIslandClient:
             },
         )
         resp.raise_for_status()
-        return resp.json()
+        return ViewPortData.from_api(resp.json(), round_id, seed_index)
 
-    def submit(self, round_id: str, predictions: NDArray[np.float64]) -> dict:
-        """Submit predictions.
+    def submit(
+        self,
+        round_id: str,
+        seed_index: int,
+        prediction: NDArray[np.float64],
+        max_retries: int = 3,
+    ) -> dict:
+        """Submit prediction for a single seed.
+
+        Sleeps 1s between calls and retries on 429 (rate limit).
 
         Args:
-            round_id: The round to submit for
-            predictions: Shape [40][40][6] array of probabilities.
-                         Each cell's 6 values must sum to ~1.0.
+            round_id: The round to submit for.
+            seed_index: Which seed this prediction is for.
+            prediction: Shape (H, W, 6) array of probabilities.
+                Each cell's 6 values must sum to ~1.0.
+            max_retries: Number of retries on 429.
         """
-        assert predictions.shape == (MAP_SIZE, MAP_SIZE, NUM_CLASSES)
-        resp = self.session.post(
-            f"{BASE_URL}/submit",
-            json={
-                "round_id": round_id,
-                "predictions": predictions.tolist(),
-            },
-        )
+        assert prediction.ndim == 3
+        assert prediction.shape[2] == N_CLASSES
+
+        payload = {
+            "round_id": round_id,
+            "seed_index": seed_index,
+            "prediction": prediction.tolist(),
+        }
+
+        for attempt in range(max_retries + 1):
+            time.sleep(1.0)
+            resp = self.session.post(f"{BASE_URL}/submit", json=payload)
+            if resp.status_code == 429 and attempt < max_retries:
+                time.sleep(5.0)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+
         resp.raise_for_status()
         return resp.json()
 
@@ -112,11 +255,11 @@ class AstarIslandClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_analysis(self, round_id: str, seed_index: int) -> dict:
+    def get_analysis(self, round_id: str, seed_index: int) -> AnalysisData:
         """Get post-round ground truth comparison."""
         resp = self.session.get(f"{BASE_URL}/analysis/{round_id}/{seed_index}")
         resp.raise_for_status()
-        return resp.json()
+        return AnalysisData.from_api(resp.json())
 
     def get_leaderboard(self) -> dict:
         """Get public standings."""

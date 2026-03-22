@@ -2,10 +2,12 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv sync --frozen
+RUN pip install uv
 
-COPY . .
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY tripletex/ tripletex/
 
 EXPOSE 8080
-CMD ["uv", "run", "uvicorn", "nmai.tasks.tripletex.solve:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uv", "run", "uvicorn", "tripletex.solve:app", "--host", "0.0.0.0", "--port", "8080"]

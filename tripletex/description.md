@@ -7,9 +7,11 @@ You must provide an HTTPS endpoint URL. The system sends POST requests to your `
 ## Request Format (sent to your endpoint)
 ```json
 {
-  "task_prompt": "Accounting task in one of 7 languages",
-  "session_token": "Auth credential for Tripletex API",
-  "base_url": "Tripletex API proxy URL",
+  "prompt": "Accounting task in one of 7 languages",
+  "tripletex_credentials": {
+    "base_url": "Tripletex API proxy URL",
+    "session_token": "Auth credential for Tripletex API"
+  },
   "files": ["Optional base64-encoded PDFs/images"]
 }
 ```
