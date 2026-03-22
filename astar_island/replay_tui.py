@@ -17,21 +17,30 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from typing import Any
+from typing import ClassVar
 
 from rich.segment import Segment
 from rich.style import Style
+from rich.text import Text
 from textual import on
-from textual.app import App, ComposeResult
+from textual.app import App
+from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
+from textual.containers import Vertical
+from textual.events import Click
 from textual.geometry import Size
 from textual.message import Message
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer
+from textual.widgets import Header
+from textual.widgets import Static
 
-from astar_island.replay import Replay, Settlement, tile_name
+from astar_island.replay import Replay
+from astar_island.replay import tile_name
 
 LOG_FILE = Path("replay_tui.log")
 logging.basicConfig(
@@ -44,22 +53,22 @@ log = logging.getLogger(__name__)
 
 # Tile colors: background color per raw grid value
 TILE_STYLES: dict[int, Style] = {
-    11: Style(color="black", bgcolor="#90b050"),      # plains - green
-    10: Style(color="white", bgcolor="#2050a0"),       # water - blue
-    1: Style(color="white", bgcolor="#d04040"),        # settlement - red
-    2: Style(color="white", bgcolor="#d0a020"),        # port - gold
-    3: Style(color="white", bgcolor="#707070"),        # ruin - grey
-    4: Style(color="white", bgcolor="#206020"),        # forest - dark green
-    5: Style(color="white", bgcolor="#a0a0a0"),        # mountain - light grey
+    11: Style(color="black", bgcolor="#90b050"),  # plains - green
+    10: Style(color="white", bgcolor="#2050a0"),  # water - blue
+    1: Style(color="white", bgcolor="#d04040"),  # settlement - red
+    2: Style(color="white", bgcolor="#d0a020"),  # port - gold
+    3: Style(color="white", bgcolor="#707070"),  # ruin - grey
+    4: Style(color="white", bgcolor="#206020"),  # forest - dark green
+    5: Style(color="white", bgcolor="#a0a0a0"),  # mountain - light grey
 }
 
 TILE_CHARS: dict[int, str] = {
     11: "  ",  # plains
     10: "~~",  # water
-    1: "##",   # settlement
-    2: "@@",   # port
-    3: "..",   # ruin
-    4: "&&",   # forest
+    1: "##",  # settlement
+    2: "@@",  # port
+    3: "..",  # ruin
+    4: "&&",  # forest
     5: "/\\",  # mountain
 }
 
@@ -80,10 +89,10 @@ class GridWidget(Widget):
     can_focus = True
 
     frame_index: reactive[int] = reactive(0)
-    highlight_changes: reactive[bool] = reactive(False)
+    highlight_changes: reactive[bool] = reactive(False)  # noqa: FBT003
     cell_width: reactive[int] = reactive(2)
 
-    def __init__(self, replay: Replay, **kwargs) -> None:
+    def __init__(self, replay: Replay, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.replay = replay
         self._changed_set: set[tuple[int, int]] = set()
@@ -132,7 +141,7 @@ class GridWidget(Widget):
 
         return Strip(segments)
 
-    def on_click(self, event) -> None:
+    def on_click(self, event: Click) -> None:
         x = event.x // self.cell_width
         y = event.y
         if 0 <= x < self.replay.width and 0 <= y < self.replay.height:
@@ -146,7 +155,7 @@ class InfoPanel(Widget):
     selected_x: reactive[int] = reactive(-1, layout=False)
     selected_y: reactive[int] = reactive(-1, layout=False)
 
-    def __init__(self, replay: Replay, **kwargs) -> None:
+    def __init__(self, replay: Replay, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.replay = replay
 
@@ -163,8 +172,7 @@ class InfoPanel(Widget):
     def watch_selected_x(self, value: int) -> None:
         self.refresh()
 
-    def render(self) -> str:
-        from rich.text import Text
+    def render(self) -> Text:
 
         text = Text()
         frame = self.replay.frames[self.frame_index]
@@ -173,14 +181,20 @@ class InfoPanel(Widget):
         # Frame info
         text.append(f"Step {frame.step}", style="bold #e0e0e0")
         text.append(f" / {self.replay.frames[-1].step}\n", style="#e0e0e0")
-        text.append(f"Settlements: {frame.n_settlements} ({frame.n_alive} alive)\n", style="#e0e0e0")
+        text.append(
+            f"Settlements: {frame.n_settlements} ({frame.n_alive} alive)\n",
+            style="#e0e0e0",
+        )
         text.append(f"Changes: {len(transitions)}\n\n", style="#e0e0e0")
 
         # Changes this step
         if transitions:
             text.append("Changes this step:\n", style="bold #e0e0e0")
             for t in transitions[:20]:
-                text.append(f"  ({t.x:2d},{t.y:2d}) {t.old_name} -> {t.new_name}\n", style="#e0e0e0")
+                text.append(
+                    f"  ({t.x:2d},{t.y:2d}) {t.old_name} -> {t.new_name}\n",
+                    style="#e0e0e0",
+                )
             if len(transitions) > 20:
                 text.append(f"  ... +{len(transitions) - 20} more\n", style="#e0e0e0")
             text.append("\n")
@@ -199,15 +213,24 @@ class InfoPanel(Widget):
                     text.append(" PORT", style="bold yellow")
                 if not settlement.alive:
                     text.append(" DEAD", style="bold red")
-                text.append(f"\n  Pop: {settlement.population:.3f}  Food: {settlement.food:.3f}\n", style="#e0e0e0")
-                text.append(f"  Wealth: {settlement.wealth:.3f}  Def: {settlement.defense:.3f}\n", style="#e0e0e0")
+                text.append(
+                    f"\n  Pop: {settlement.population:.3f}  Food: {settlement.food:.3f}\n",
+                    style="#e0e0e0",
+                )
+                text.append(
+                    f"  Wealth: {settlement.wealth:.3f}  Def: {settlement.defense:.3f}\n",
+                    style="#e0e0e0",
+                )
 
             history = self.replay.cell_history(x, y)
             if history:
                 text.append(f"\nHistory ({len(history)} transitions):\n", style="bold #e0e0e0")
                 for t in history:
                     marker = " <<" if t.step == self.frame_index else ""
-                    text.append(f"  step {t.step:2d}: {t.old_name} -> {t.new_name}{marker}\n", style="#e0e0e0")
+                    text.append(
+                        f"  step {t.step:2d}: {t.old_name} -> {t.new_name}{marker}\n",
+                        style="#e0e0e0",
+                    )
             else:
                 text.append("No transitions (static cell)\n", style="#808080")
 
@@ -218,11 +241,10 @@ class LegendPanel(Static):
     """Static legend showing tile types."""
 
     def on_mount(self) -> None:
-        from rich.text import Text
 
         text = Text()
         text.append("Legend\n", style="bold #e0e0e0")
-        for val, name in sorted(TILE_CHARS.items(), key=lambda x: x[0]):
+        for val, _name in sorted(TILE_CHARS.items(), key=lambda x: x[0]):
             char = TILE_CHARS[val]
             text.append(f"  {char} {tile_name(val)}\n", style="#e0e0e0")
         text.append("\n")
@@ -275,7 +297,7 @@ class ReplayTUI(App):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("right,l", "step_forward", "Next"),
         Binding("left,h", "step_backward", "Prev"),
         Binding("home", "jump_start", "Start"),
@@ -351,12 +373,12 @@ class ReplayTUI(App):
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: uv run python -m astar_island.replay_tui <replay.json>")
+        print("Usage: uv run python -m astar_island.replay_tui <replay.json>")  # noqa: T201
         sys.exit(1)
 
     path = Path(sys.argv[1])
     if not path.exists():
-        print(f"File not found: {path}")
+        print(f"File not found: {path}")  # noqa: T201
         sys.exit(1)
 
     replay = Replay.from_file(path)

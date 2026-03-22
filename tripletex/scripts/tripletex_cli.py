@@ -17,6 +17,7 @@ Env vars:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -136,7 +137,11 @@ def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
     if params and "accountId" in params and "," in str(params["accountId"]):
         print(
             json.dumps(
-                {"error": "accountId does not support comma-separated values (returns 404). Make one request per accountId instead."},
+                {
+                    "error": (
+                        "accountId does not support comma-separated values (returns 404). Make one request per accountId instead."
+                    ),
+                },
             ),
         )
         return
@@ -148,7 +153,11 @@ def cmd_get(client: httpx.Client, endpoint: str, params: dict | None) -> None:
         if bad:
             print(
                 json.dumps(
-                    {"error": f"Invalid fields filter: {', '.join(sorted(bad))} are response envelope fields, not DTO fields. Use DTO field names directly, e.g. 'id,date,account(id,number,name),amountGross'."},
+                    {
+                        "error": (
+                            f"Invalid fields filter: {', '.join(sorted(bad))} are response envelope fields, not DTO fields. Use DTO field names directly, e.g. 'id,date,account(id,number,name),amountGross'."
+                        ),
+                    },
                 ),
             )
             return
@@ -279,7 +288,8 @@ Do NOT suggest speculative alternatives you aren't sure work."""
 
     # Write output to temp file via shell redirect — claude CLI suppresses
     # stdout when it detects a Python pipe in nested invocations.
-    outfile = tempfile.mktemp(suffix=".json")
+    fd, outfile = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
     cmd = (
         f"claude -p {shlex.quote(plan)}"
         f" --system-prompt {shlex.quote(system_prompt)}"
@@ -289,7 +299,7 @@ Do NOT suggest speculative alternatives you aren't sure work."""
     )
 
     t0 = time.monotonic()
-    proc = subprocess.Popen(cmd, shell=True, env=env)
+    proc = subprocess.Popen(cmd, shell=True, env=env)  # noqa: S602
 
     # Poll with timeout
     timed_out = False
@@ -306,24 +316,25 @@ Do NOT suggest speculative alternatives you aren't sure work."""
     # Read result from temp file
     result_text = ""
     try:
-        with open(outfile) as f:
+        with Path(outfile).open() as f:
             raw = f.read().strip()
         if raw:
             try:
                 msg = json.loads(raw)
                 result_text = msg.get("result", raw)
                 if msg.get("is_error"):
-                    print(f"[review-plan] claude reported error: {result_text[:300]}", file=sys.stderr)
+                    print(
+                        f"[review-plan] claude reported error: {result_text[:300]}",
+                        file=sys.stderr,
+                    )
             except json.JSONDecodeError:
                 # Plain text output
                 result_text = raw
     except FileNotFoundError:
         print("[review-plan] output file not created", file=sys.stderr)
     finally:
-        try:
-            os.unlink(outfile)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError):
+            Path(outfile).unlink()
 
     _log_call("REVIEW_PLAN", "", 200 if result_text else 408)
 
@@ -332,7 +343,11 @@ Do NOT suggest speculative alternatives you aren't sure work."""
     elif timed_out:
         print(json.dumps({"error": f"Review timed out after {elapsed:.1f}s"}))
     else:
-        print(json.dumps({"error": f"Review produced no result (exit {proc.returncode}, {elapsed:.1f}s)"}))
+        print(
+            json.dumps(
+                {"error": f"Review produced no result (exit {proc.returncode}, {elapsed:.1f}s)"},
+            ),
+        )
 
 
 def main() -> None:
@@ -360,8 +375,7 @@ def main() -> None:
 
     p_review = sub.add_parser("review-plan")
     p_review.add_argument("plan", help="Your intended API calls as text")
-    p_review.add_argument("--domains", nargs="+",
-                          help="Domains involved in the task")
+    p_review.add_argument("--domains", nargs="+", help="Domains involved in the task")
 
     args = parser.parse_args()
 

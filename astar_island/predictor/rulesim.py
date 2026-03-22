@@ -14,29 +14,29 @@ import numpy as np
 from numpy.typing import NDArray
 
 from astar_island.client import N_CLASSES
+from astar_island.model import RAW_VALUE_TO_CLASS
 from astar_island.model import IslandPredictor
 from astar_island.model import SeedState
-from astar_island.predictor.diffuser import VIEWPORT_VALUE_TO_CLASS
 
 # Raw grid value -> class index (same mapping as diffuser)
 RAW_TO_CLASS = {
     10: 0,  # water
     11: 0,  # plains
-    1: 1,   # settlement
-    2: 2,   # port
-    3: 3,   # ruin
-    4: 4,   # forest
-    5: 5,   # mountain
+    1: 1,  # settlement
+    2: 2,  # port
+    3: 3,  # ruin
+    4: 4,  # forest
+    5: 5,  # mountain
 }
 
 # Class index -> raw grid value (for simulation grids, pick one canonical raw value)
 CLASS_TO_RAW: dict[int, int] = {
     0: 11,  # plains (default land empty)
-    1: 1,   # settlement
-    2: 2,   # port
-    3: 3,   # ruin
-    4: 4,   # forest
-    5: 5,   # mountain
+    1: 1,  # settlement
+    2: 2,  # port
+    3: 3,  # ruin
+    4: 4,  # forest
+    5: 5,  # mountain
 }
 
 
@@ -242,7 +242,6 @@ class RuleSimPredictor(IslandPredictor):
     def predict(
         self,
         seed_state: SeedState,
-        probs: NDArray[np.float64],
     ) -> NDArray[np.float64]:
         h, w = seed_state.water_mask.shape
         initial_grid = self._reconstruct_raw_grid(seed_state, h, w)
@@ -267,7 +266,7 @@ class RuleSimPredictor(IslandPredictor):
         vh, vw = vp.shape
 
         one_hot = np.zeros((vh, vw, N_CLASSES), dtype=np.float64)
-        for raw_val, class_idx in VIEWPORT_VALUE_TO_CLASS.items():
+        for raw_val, class_idx in RAW_VALUE_TO_CLASS.items():
             mask = vp == raw_val
             one_hot[mask, class_idx] = 1.0
 

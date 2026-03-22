@@ -9,17 +9,17 @@ from astar_island.model import SeedState
 from astar_island.model import create_seed_state
 from astar_island.model import find_coastal_cells
 from astar_island.model import parse_raw_grid
-from astar_island.predictor.diffuser import DEFAULT_KERNELS
-from astar_island.predictor.diffuser import PRIOR_EMPTY_LAND
-from astar_island.predictor.diffuser import PRIOR_FOREST
-from astar_island.predictor.diffuser import PRIOR_MOUNTAIN
-from astar_island.predictor.diffuser import PRIOR_SETTLEMENT
-from astar_island.predictor.diffuser import PRIOR_WATER
+from astar_island.predictor.diffuser import DiffusionParams
 from astar_island.predictor.diffuser import DiffusionPredictor
 from astar_island.predictor.diffuser import SymmetricKernel
-from astar_island.predictor.diffuser import _apply_diffusion
-from astar_island.predictor.diffuser import _build_prior
+from astar_island.predictor.diffuser import TerrainPriors
+from astar_island.predictor.diffuser import apply_diffusion
+from astar_island.predictor.diffuser import build_prior
 from astar_island.predictor.diffuser import _convolve2d
+
+# Default instances for test access
+_PRIORS = TerrainPriors()
+_DIFFUSION = DiffusionParams()
 from astar_island.rules import _ensure_min_probability as ensure_min_probability
 
 MAP_SIZE = 40  # Test grid size
@@ -69,12 +69,12 @@ def simple_seed_state(simple_map: list[list[int]]) -> SeedState:
 
 @pytest.fixture
 def simple_probs(simple_seed_state: SeedState) -> np.ndarray:
-    return _build_prior(simple_seed_state)
+    return build_prior(simple_seed_state, _PRIORS)
 
 
 class TestSymmetricKernel:
     def test_symmetry_structure(self) -> None:
-        k = SymmetricKernel(center=0.4, edge=0.1, corner=0.05)
+        k = SymmetricKernel(edge=0.1)
         arr = k.to_array()
 
         # Check up/down symmetry
@@ -83,16 +83,23 @@ class TestSymmetricKernel:
         np.testing.assert_array_almost_equal(arr[:, 0], arr[:, 2])
         # Check all edges are equal
         assert arr[0, 1] == arr[1, 0] == arr[2, 1] == arr[1, 2]
+        # Corners should be zero
+        assert arr[0, 0] == arr[0, 2] == arr[2, 0] == arr[2, 2] == 0.0
 
     def test_sums_to_one(self) -> None:
-        k = SymmetricKernel(center=0.4, edge=0.1, corner=0.05)
+        k = SymmetricKernel(edge=0.1)
         arr = k.to_array()
         np.testing.assert_almost_equal(arr.sum(), 1.0)
 
-    def test_normalization(self) -> None:
-        # Even with arbitrary values, to_array normalizes to sum 1
-        k = SymmetricKernel(center=10.0, edge=2.0, corner=1.0)
+    def test_center_derived(self) -> None:
+        k = SymmetricKernel(edge=0.1)
         arr = k.to_array()
+        np.testing.assert_almost_equal(arr[1, 1], 0.6)  # 1 - 4*0.1
+
+    def test_identity(self) -> None:
+        k = SymmetricKernel(edge=0.0)
+        arr = k.to_array()
+        np.testing.assert_almost_equal(arr[1, 1], 1.0)
         np.testing.assert_almost_equal(arr.sum(), 1.0)
 
 
@@ -167,34 +174,34 @@ class TestCreateSeedState:
 
 class TestBuildPrior:
     def test_output_shape(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
+        probs = build_prior(simple_seed_state, _PRIORS)
         assert probs.shape == (MAP_SIZE, MAP_SIZE, N_CLASSES)
 
     def test_sums_to_one(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
+        probs = build_prior(simple_seed_state, _PRIORS)
         sums = probs.sum(axis=-1)
         np.testing.assert_array_almost_equal(sums, 1.0)
 
     def test_water_cells_get_water_prior(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
+        probs = build_prior(simple_seed_state, _PRIORS)
         water_cell = np.where(simple_seed_state.water_mask)
         if len(water_cell[0]) > 0:
             y, x = water_cell[0][0], water_cell[1][0]
-            np.testing.assert_array_almost_equal(probs[y, x], PRIOR_WATER)
+            np.testing.assert_array_almost_equal(probs[y, x], _PRIORS.water)
 
     def test_mountain_cells_get_mountain_prior(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
-        np.testing.assert_array_almost_equal(probs[20, 20], PRIOR_MOUNTAIN)
+        probs = build_prior(simple_seed_state, _PRIORS)
+        np.testing.assert_array_almost_equal(probs[20, 20], _PRIORS.mountain)
 
     def test_settlement_cells_get_settlement_prior(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
+        probs = build_prior(simple_seed_state, _PRIORS)
         # Settlement at (10, 10) - check it got a settlement prior (not empty land)
-        assert probs[10, 10, 1] > PRIOR_EMPTY_LAND[1]  # higher settlement prob
+        assert probs[10, 10, 1] > _PRIORS.empty_land[1]  # higher settlement prob
 
     def test_forest_cells_get_forest_prior(self, simple_seed_state: SeedState) -> None:
-        probs = _build_prior(simple_seed_state)
+        probs = build_prior(simple_seed_state, _PRIORS)
         # Forest ring at row 2
-        np.testing.assert_array_almost_equal(probs[2, 5], PRIOR_FOREST)
+        np.testing.assert_array_almost_equal(probs[2, 5], _PRIORS.forest)
 
 
 class TestConvolve2d:
@@ -227,8 +234,8 @@ class TestApplyDiffusion:
         self, simple_seed_state: SeedState, simple_probs: np.ndarray,
     ) -> None:
         static_mask = simple_seed_state.water_mask | simple_seed_state.mountain_mask
-        result = _apply_diffusion(
-            simple_probs, DEFAULT_KERNELS, 1, static_mask, simple_probs.copy(),
+        result = apply_diffusion(
+            simple_probs, DiffusionParams(n_steps=1), static_mask, simple_probs.copy(),
         )
         assert result.shape == (MAP_SIZE, MAP_SIZE, N_CLASSES)
 
@@ -236,8 +243,8 @@ class TestApplyDiffusion:
         self, simple_seed_state: SeedState, simple_probs: np.ndarray,
     ) -> None:
         static_mask = simple_seed_state.water_mask | simple_seed_state.mountain_mask
-        result = _apply_diffusion(
-            simple_probs, DEFAULT_KERNELS, 1, static_mask, simple_probs.copy(),
+        result = apply_diffusion(
+            simple_probs, DiffusionParams(n_steps=1), static_mask, simple_probs.copy(),
         )
         sums = result.sum(axis=-1)
         np.testing.assert_array_almost_equal(sums, 1.0)
@@ -247,8 +254,8 @@ class TestApplyDiffusion:
     ) -> None:
         static_mask = simple_seed_state.water_mask | simple_seed_state.mountain_mask
         static_probs = simple_probs.copy()
-        result = _apply_diffusion(
-            simple_probs, DEFAULT_KERNELS, 1, static_mask, static_probs,
+        result = apply_diffusion(
+            simple_probs, DiffusionParams(n_steps=1), static_mask, static_probs,
         )
         np.testing.assert_array_almost_equal(result[static_mask], static_probs[static_mask])
 
@@ -273,7 +280,7 @@ class TestDiffusionPredictor:
     def _predict(self, simple_map: list[list[int]], num_steps: int = 1) -> np.ndarray:
         from astar_island.client import RoundData, SeedData  # noqa: PLC0415
 
-        predictor = DiffusionPredictor(num_steps=num_steps)
+        predictor = DiffusionPredictor(diffusion=DiffusionParams(n_steps=num_steps))
         grid = np.array(simple_map, dtype=np.int16)
         h, w = grid.shape
         round_data = RoundData(
@@ -323,22 +330,28 @@ class TestPriorDistributions:
 
     @pytest.mark.parametrize(
         "prior",
-        [PRIOR_WATER, PRIOR_MOUNTAIN, PRIOR_SETTLEMENT, PRIOR_FOREST, PRIOR_EMPTY_LAND],
+        [_PRIORS.water, _PRIORS.mountain, _PRIORS.settlement, _PRIORS.forest, _PRIORS.empty_land],
     )
     def test_sums_to_one(self, prior: np.ndarray) -> None:
         np.testing.assert_almost_equal(prior.sum(), 1.0)
 
     @pytest.mark.parametrize(
         "prior",
-        [PRIOR_SETTLEMENT, PRIOR_FOREST, PRIOR_EMPTY_LAND],
+        [_PRIORS.settlement, _PRIORS.forest, _PRIORS.empty_land],
     )
-    def test_dynamic_priors_no_mountain(self, prior: np.ndarray) -> None:
-        assert prior[5] == 0.0  # mountain class should be 0
-        assert (prior[:5] > 0).all()  # all non-mountain classes should be > 0
+    def test_dynamic_priors_zero_classes(self, prior: np.ndarray) -> None:
+        assert prior[2] == 0.0  # port derived via p_port
+        assert prior[3] == 0.0  # ruin derived via p_ruin
+        assert prior[5] == 0.0  # mountain enforced by rules
+        assert (prior[[0, 1, 4]] > 0).all()  # empty, settle, forest > 0
+
+    def test_p_port_and_p_ruin_in_valid_range(self) -> None:
+        assert 0.0 < _DIFFUSION.p_port < 1.0
+        assert 0.0 < _DIFFUSION.p_ruin < 1.0
 
     @pytest.mark.parametrize(
         "prior",
-        [PRIOR_WATER, PRIOR_MOUNTAIN],
+        [_PRIORS.water, _PRIORS.mountain],
     )
     def test_static_priors_are_deterministic(self, prior: np.ndarray) -> None:
         assert prior.max() == 1.0
@@ -346,7 +359,7 @@ class TestPriorDistributions:
 
     @pytest.mark.parametrize(
         "prior",
-        [PRIOR_WATER, PRIOR_MOUNTAIN, PRIOR_SETTLEMENT, PRIOR_FOREST, PRIOR_EMPTY_LAND],
+        [_PRIORS.water, _PRIORS.mountain, _PRIORS.settlement, _PRIORS.forest, _PRIORS.empty_land],
     )
     def test_has_six_classes(self, prior: np.ndarray) -> None:
         assert prior.shape == (N_CLASSES,)

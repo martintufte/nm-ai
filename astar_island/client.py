@@ -1,5 +1,6 @@
 """Astar Island API client."""
 
+import time
 from dataclasses import dataclass
 from typing import Final
 
@@ -106,15 +107,15 @@ class ViewPortData:
     @classmethod
     def from_api(cls, data: dict, round_id: str, seed_index: int) -> "ViewPortData":
         """Parse the raw API JSON response into ViewPortData."""
+        vp = data["viewport"]
         grid = np.array(data["grid"], dtype=np.int16)
-        h, w = grid.shape
         return cls(
             round_id=round_id,
             seed_index=seed_index,
-            viewport_x=data["x"],
-            viewport_y=data["y"],
-            viewport_w=w,
-            viewport_h=h,
+            viewport_x=vp["x"],
+            viewport_y=vp["y"],
+            viewport_w=vp["w"],
+            viewport_h=vp["h"],
             grid=grid,
         )
 
@@ -179,6 +180,8 @@ class AstarIslandClient:
     def simulate(self, round_id: str, seed_index: int, x: int, y: int) -> ViewPortData:
         """Query a 15x15 viewport (costs 1 query).
 
+        Sleeps 250ms between calls to stay under the 5 req/sec rate limit.
+
         Args:
             round_id: The round to query
             seed_index: Which seed to observe
@@ -188,6 +191,7 @@ class AstarIslandClient:
         Returns:
             ViewPortData with grid and viewport bounds.
         """
+        time.sleep(0.25)
         resp = self.session.post(
             f"{BASE_URL}/simulate",
             json={
@@ -200,24 +204,42 @@ class AstarIslandClient:
         resp.raise_for_status()
         return ViewPortData.from_api(resp.json(), round_id, seed_index)
 
-    def submit(self, round_id: str, predictions: NDArray[np.float64]) -> dict:
-        """Submit predictions.
+    def submit(
+        self,
+        round_id: str,
+        seed_index: int,
+        prediction: NDArray[np.float64],
+        max_retries: int = 3,
+    ) -> dict:
+        """Submit prediction for a single seed.
+
+        Sleeps 1s between calls and retries on 429 (rate limit).
 
         Args:
-            round_id: The round to submit for
-            predictions: Shape (H, W, 6) array of probabilities.
+            round_id: The round to submit for.
+            seed_index: Which seed this prediction is for.
+            prediction: Shape (H, W, 6) array of probabilities.
                 Each cell's 6 values must sum to ~1.0.
+            max_retries: Number of retries on 429.
         """
-        assert predictions.ndim == 3
-        assert predictions.shape[2] == N_CLASSES
+        assert prediction.ndim == 3
+        assert prediction.shape[2] == N_CLASSES
 
-        resp = self.session.post(
-            f"{BASE_URL}/submit",
-            json={
-                "round_id": round_id,
-                "predictions": predictions.tolist(),
-            },
-        )
+        payload = {
+            "round_id": round_id,
+            "seed_index": seed_index,
+            "prediction": prediction.tolist(),
+        }
+
+        for attempt in range(max_retries + 1):
+            time.sleep(1.0)
+            resp = self.session.post(f"{BASE_URL}/submit", json=payload)
+            if resp.status_code == 429 and attempt < max_retries:
+                time.sleep(5.0)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+
         resp.raise_for_status()
         return resp.json()
 
