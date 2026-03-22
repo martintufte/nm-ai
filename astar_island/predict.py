@@ -21,7 +21,6 @@ from astar_island.client import AstarIslandClient
 from astar_island.client import ViewPortData
 from astar_island.model import IslandModel
 from astar_island.model import IslandPredictor
-from astar_island.query_selector import select_queries
 from astar_island.visualize import plot_heatmap_combined
 from astar_island.visualize import plot_heatmap_grid
 
@@ -152,14 +151,15 @@ def run_prediction_pipeline(
     model = IslandModel.from_round_data(round_data=round_data, predictor=predictor)
     LOGGER.info("Model initialized with %d seeds", round_data.seeds_count)
 
-    # Run viewport queries (50 strategic queries)
+    # Run viewport queries up to budget
     submission_dir = SUBMISSIONS_DIR / f"round_{round_data.round_number:02d}"
-    queries = select_queries(model)
-    for i, (seed_idx, x, y) in enumerate(queries):
-        LOGGER.info("Query %d/%d: seed=%d, x=%d, y=%d", i + 1, len(queries), seed_idx, x, y)
+    n_queries = budget_data.queries_max - budget_data.queries_used
+    for i in range(n_queries):
+        seed_idx, x, y = model.select_query()
+        LOGGER.info("Query %d/%d: seed=%d, x=%d, y=%d", i + 1, n_queries, seed_idx, x, y)
         result = client.simulate(round_id, seed_idx, x, y)
         model.update(result)
-    LOGGER.info("Ran %d viewport queries", len(queries))
+    LOGGER.info("Ran %d viewport queries", n_queries)
 
     # Save viewports immediately (before fitting, in case something fails)
     _save_viewports(submission_dir, model.observed_viewports)

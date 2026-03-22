@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import time
 
-from astar_island.predictor.rule_candidates import SpatialKernelRule
 from astar_island.predictor.rule_candidates import generate_candidates
 from astar_island.predictor.rule_eval import ReplayCorpus
 from astar_island.predictor.rule_eval import evaluate_rule
@@ -26,11 +25,11 @@ from astar_island.predictor.rulesim import LongboatSettlementToPort
 from astar_island.predictor.rulesim import PlainsToRuin
 from astar_island.predictor.rulesim import PlainsToSettlement
 from astar_island.predictor.rulesim import PortToRuin
-from astar_island.predictor.rulesim import Rule
 from astar_island.predictor.rulesim import RuinToForest
 from astar_island.predictor.rulesim import RuinToPlains
 from astar_island.predictor.rulesim import RuinToPort
 from astar_island.predictor.rulesim import RuinToSettlement
+from astar_island.predictor.rulesim import Rule
 from astar_island.predictor.rulesim import SettlementToPort
 from astar_island.predictor.rulesim import SettlementToRuin
 
@@ -53,11 +52,34 @@ def get_named_rules() -> dict[str, Rule]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate rules against replay data")
-    parser.add_argument("--max-dist", type=int, default=3, help="Max Chebyshev distance for candidates")
-    parser.add_argument("--rule", type=str, default=None, help="Evaluate only a named rule (e.g. RuinToForest)")
-    parser.add_argument("--data-dir", type=str, default="astar_island/data", help="Replay data directory")
-    parser.add_argument("--candidates", action="store_true", help="Generate and evaluate all candidates")
-    parser.add_argument("--longboat", action="store_true", help="Evaluate longboat (water-boosted) rules")
+    parser.add_argument(
+        "--max-dist",
+        type=int,
+        default=3,
+        help="Max Chebyshev distance for candidates",
+    )
+    parser.add_argument(
+        "--rule",
+        type=str,
+        default=None,
+        help="Evaluate only a named rule (e.g. RuinToForest)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="astar_island/data",
+        help="Replay data directory",
+    )
+    parser.add_argument(
+        "--candidates",
+        action="store_true",
+        help="Generate and evaluate all candidates",
+    )
+    parser.add_argument(
+        "--longboat",
+        action="store_true",
+        help="Evaluate longboat (water-boosted) rules",
+    )
     args = parser.parse_args()
 
     print("Loading corpus...")
@@ -83,13 +105,12 @@ def main() -> None:
             LongboatSettlementToPort,
             LongboatRuinToPort,
         ]
-        for factory in longboat_factories:
-            for connectivity in (4, 8):
-                for max_dist_water in (10, 15, 20):
-                    rules_to_eval.append(factory(
-                        connectivity=connectivity,
-                        max_dist_water=max_dist_water,
-                    ))
+        rules_to_eval.extend(
+            factory(connectivity=connectivity, max_dist_water=max_dist_water)
+            for factory in longboat_factories
+            for connectivity in (4, 8)
+            for max_dist_water in (10, 15, 20)
+        )
         print(f"  {len(rules_to_eval)} longboat variants\n")
     elif args.candidates:
         print(f"Generating candidates (max_dist={args.max_dist})...")
@@ -116,7 +137,9 @@ def main() -> None:
 
     # Summary table for large runs
     if len(results) > 20:
-        print(f"\n{'Rule':<55s} {'n_imp':>6s} {'p_mle':>10s} {'CI_low':>10s} {'CI_high':>10s} {'n_elig':>10s} {'n_fired':>8s}")
+        print(
+            f"\n{'Rule':<55s} {'n_imp':>6s} {'p_mle':>10s} {'CI_low':>10s} {'CI_high':>10s} {'n_elig':>10s} {'n_fired':>8s}",
+        )
         print("-" * 120)
 
         with_fit = [r for r in results if r.fit is not None]
@@ -128,7 +151,7 @@ def main() -> None:
             imp_str = str(n_imp) if n_imp > 0 else ""
             print(
                 f"{r.rule_name:<55s} {imp_str:>6s} {f.p_mle:>10.6f} {f.ci_low:>10.6f} "
-                f"{f.ci_high:>10.6f} {f.n_eligible:>10d} {f.n_fired:>8d}"
+                f"{f.ci_high:>10.6f} {f.n_eligible:>10d} {f.n_fired:>8d}",
             )
 
         no_fit = [r for r in results if r.fit is None]

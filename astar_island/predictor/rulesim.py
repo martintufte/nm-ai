@@ -133,12 +133,14 @@ def _chebyshev_has_neighbor(
     return min_d <= max_dist, min_d
 
 
-_CHEBYSHEV_OFFSETS = [(dy, dx) for dy in range(-1, 2) for dx in range(-1, 2) if not (dy == 0 and dx == 0)]
+_CHEBYSHEV_OFFSETS = [
+    (dy, dx) for dy in range(-1, 2) for dx in range(-1, 2) if not (dy == 0 and dx == 0)
+]
 _MANHATTAN_OFFSETS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 # Precomputed binary structures for scipy distance_transform_cdt
 _CDT_STRUCT_CHEBYSHEV = _gen_struct(2, 2)  # 8-connected (chessboard)
-_CDT_STRUCT_MANHATTAN = _gen_struct(2, 1)   # 4-connected (cityblock)
+_CDT_STRUCT_MANHATTAN = _gen_struct(2, 1)  # 4-connected (cityblock)
 
 
 def _distance_map(
@@ -165,7 +167,7 @@ def _distance_map(
 
     # 3D: loop over realizations, calling C directly to avoid wrapper overhead
     _REVERSE_2D = (slice(None, None, -1), slice(None, None, -1))
-    n, h, w = source.shape
+    n, _h, _w = source.shape
     dist = np.empty(source.shape, dtype=np.int32)
     for i in range(n):
         dt = np.where(source[i], 0, -1).astype(np.int32)
@@ -178,9 +180,9 @@ def _distance_map(
 
 
 def _max_adjacent(
-    grid: NDArray[np.float64],
+    grid: NDArray[np.floating],  # type: ignore[type-var]
     connectivity: int = 4,
-) -> NDArray[np.float64]:
+) -> NDArray[np.floating]:  # type: ignore[type-var]
     """For each cell, return the max value among its neighbors.
 
     Args:
@@ -240,7 +242,7 @@ def _has_neighbor_mask_3d(
     Uses iterative dilation: max_dist iterations of 8-neighbor OR,
     giving max_dist * 8 ops instead of (2d+1)^2 - 1 ops.
     """
-    n, h, w = grid_3d.shape
+    _n, h, w = grid_3d.shape
     result = grid_3d.copy()
     for _ in range(max_dist):
         padded = np.pad(result, ((0, 0), (1, 1), (1, 1)), constant_values=False)
@@ -249,9 +251,22 @@ def _has_neighbor_mask_3d(
     return result
 
 
-def RuinToForest(a: float = 0.2005, b: float = 0.0928, metric: str = "manhattan") -> "KernelSpawnRule":
+def RuinToForest(
+    a: float = 0.2005,
+    b: float = 0.0928,
+    metric: str = "manhattan",
+) -> "KernelSpawnRule":
     """Ruin near forest becomes forest. Replay-fitted: nearly flat decay (b~0.09)."""
-    return KernelSpawnRule(3, 4, source_raw=4, a=a, b=b, max_dist=5, metric=metric, rule_name="RuinToForest")
+    return KernelSpawnRule(
+        3,
+        4,
+        source_raw=4,
+        a=a,
+        b=b,
+        max_dist=5,
+        metric=metric,
+        rule_name="RuinToForest",
+    )
 
 
 class UnconditionalRule(Rule):
@@ -264,7 +279,10 @@ class UnconditionalRule(Rule):
         self.old_raw = old_raw
         self.new_raw = new_raw
         self.p = p
-        self._name = rule_name or f"{self._RAW_NAMES.get(old_raw, str(old_raw))}To{self._RAW_NAMES.get(new_raw, str(new_raw)).capitalize()}"
+        self._name = (
+            rule_name
+            or f"{self._RAW_NAMES.get(old_raw, str(old_raw))}To{self._RAW_NAMES.get(new_raw, str(new_raw)).capitalize()}"
+        )
         self._old_class = RAW_TO_CLASS[old_raw]
         self._new_class = RAW_TO_CLASS[new_raw]
         self._old_name = self._RAW_NAMES.get(old_raw, str(old_raw))
@@ -554,7 +572,9 @@ class WaterBoostedKernelRule(KernelSpawnRule):
         p_water_land = p_water_land * (~water_3d)
 
         # Combine: 1 - (1-p_normal)(1-p_water_land)
-        p_combined = np.float32(1.0) - (np.float32(1.0) - p_normal) * (np.float32(1.0) - p_water_land.astype(np.float32))
+        p_combined = np.float32(1.0) - (np.float32(1.0) - p_normal) * (
+            np.float32(1.0) - p_water_land.astype(np.float32)
+        )
 
         candidates = is_old & (p_combined > 0)
         convert = candidates & (rng.random((n, h, w), dtype=np.float32) < p_combined)
@@ -577,7 +597,9 @@ class WaterBoostedKernelRule(KernelSpawnRule):
         p_water = p_water * water_3d
         p_water_land = _max_adjacent(p_water, self.connectivity)
         p_water_land = p_water_land * (~water_3d)
-        p_combined = np.float32(1.0) - (np.float32(1.0) - p_normal) * (np.float32(1.0) - p_water_land.astype(np.float32))
+        p_combined = np.float32(1.0) - (np.float32(1.0) - p_normal) * (
+            np.float32(1.0) - p_water_land.astype(np.float32)
+        )
         candidates = is_old & (p_combined > 0)
         convert = candidates & (rng.random((n, h, w), dtype=np.float32) < p_combined)
         grids[convert] = self._new_class
@@ -618,20 +640,72 @@ class WaterBoostedKernelRule(KernelSpawnRule):
 _SETT_PORT = (1, 2)
 
 
-def PlainsToSettlement(a: float = 0.0269, b: float = 0.8399, metric: str = "manhattan") -> KernelSpawnRule:
-    return KernelSpawnRule(11, 1, source_raw=_SETT_PORT, a=a, b=b, max_dist=7, metric=metric, rule_name="PlainsToSettlement")
+def PlainsToSettlement(
+    a: float = 0.0269,
+    b: float = 0.8399,
+    metric: str = "manhattan",
+) -> KernelSpawnRule:
+    return KernelSpawnRule(
+        11,
+        1,
+        source_raw=_SETT_PORT,
+        a=a,
+        b=b,
+        max_dist=7,
+        metric=metric,
+        rule_name="PlainsToSettlement",
+    )
 
 
-def ForestToSettlement(a: float = 0.0272, b: float = 0.8040, metric: str = "manhattan") -> KernelSpawnRule:
-    return KernelSpawnRule(4, 1, source_raw=_SETT_PORT, a=a, b=b, max_dist=7, metric=metric, rule_name="ForestToSettlement")
+def ForestToSettlement(
+    a: float = 0.0272,
+    b: float = 0.8040,
+    metric: str = "manhattan",
+) -> KernelSpawnRule:
+    return KernelSpawnRule(
+        4,
+        1,
+        source_raw=_SETT_PORT,
+        a=a,
+        b=b,
+        max_dist=7,
+        metric=metric,
+        rule_name="ForestToSettlement",
+    )
 
 
-def PlainsToRuin(a: float = 0.0084, b: float = 0.7977, metric: str = "manhattan") -> KernelSpawnRule:
-    return KernelSpawnRule(11, 3, source_raw=_SETT_PORT, a=a, b=b, max_dist=7, metric=metric, rule_name="PlainsToRuin")
+def PlainsToRuin(
+    a: float = 0.0084,
+    b: float = 0.7977,
+    metric: str = "manhattan",
+) -> KernelSpawnRule:
+    return KernelSpawnRule(
+        11,
+        3,
+        source_raw=_SETT_PORT,
+        a=a,
+        b=b,
+        max_dist=7,
+        metric=metric,
+        rule_name="PlainsToRuin",
+    )
 
 
-def ForestToRuin(a: float = 0.0105, b: float = 0.9515, metric: str = "manhattan") -> KernelSpawnRule:
-    return KernelSpawnRule(4, 3, source_raw=_SETT_PORT, a=a, b=b, max_dist=7, metric=metric, rule_name="ForestToRuin")
+def ForestToRuin(
+    a: float = 0.0105,
+    b: float = 0.9515,
+    metric: str = "manhattan",
+) -> KernelSpawnRule:
+    return KernelSpawnRule(
+        4,
+        3,
+        source_raw=_SETT_PORT,
+        a=a,
+        b=b,
+        max_dist=7,
+        metric=metric,
+        rule_name="ForestToRuin",
+    )
 
 
 def SettlementToPort(p: float = 0.0447) -> "AdjacentToWaterRule":
@@ -650,73 +724,139 @@ _PORT = 2
 
 
 def LongboatPlainsToSettlement(
-    a: float = 0.028, b: float = 0.87,
-    a_water: float = 0.02, b_water: float = 0.15,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 0.028,
+    b: float = 0.87,
+    a_water: float = 0.02,
+    b_water: float = 0.15,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        11, 1, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=7, max_dist_water=max_dist_water, connectivity=connectivity,
+        11,
+        1,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=7,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatPlainsToSettlement_c{connectivity}_w{max_dist_water}",
     )
 
 
 def LongboatForestToSettlement(
-    a: float = 0.030, b: float = 0.87,
-    a_water: float = 0.02, b_water: float = 0.15,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 0.030,
+    b: float = 0.87,
+    a_water: float = 0.02,
+    b_water: float = 0.15,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        4, 1, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=7, max_dist_water=max_dist_water, connectivity=connectivity,
+        4,
+        1,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=7,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatForestToSettlement_c{connectivity}_w{max_dist_water}",
     )
 
 
 def LongboatPlainsToRuin(
-    a: float = 0.009, b: float = 0.85,
-    a_water: float = 0.01, b_water: float = 0.15,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 0.009,
+    b: float = 0.85,
+    a_water: float = 0.01,
+    b_water: float = 0.15,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        11, 3, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=7, max_dist_water=max_dist_water, connectivity=connectivity,
+        11,
+        3,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=7,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatPlainsToRuin_c{connectivity}_w{max_dist_water}",
     )
 
 
 def LongboatForestToRuin(
-    a: float = 0.010, b: float = 0.91,
-    a_water: float = 0.01, b_water: float = 0.15,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 0.010,
+    b: float = 0.91,
+    a_water: float = 0.01,
+    b_water: float = 0.15,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        4, 3, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=7, max_dist_water=max_dist_water, connectivity=connectivity,
+        4,
+        3,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=7,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatForestToRuin_c{connectivity}_w{max_dist_water}",
     )
 
 
 def LongboatSettlementToPort(
-    a: float = 1.0, b: float = 2.92,
-    a_water: float = 0.05, b_water: float = 0.10,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 1.0,
+    b: float = 2.92,
+    a_water: float = 0.05,
+    b_water: float = 0.10,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        1, 2, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=5, max_dist_water=max_dist_water, connectivity=connectivity,
+        1,
+        2,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=5,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatSettlementToPort_c{connectivity}_w{max_dist_water}",
     )
 
 
 def LongboatRuinToPort(
-    a: float = 1.0, b: float = 2.25,
-    a_water: float = 0.05, b_water: float = 0.10,
-    max_dist_water: int = 15, connectivity: int = 4,
+    a: float = 1.0,
+    b: float = 2.25,
+    a_water: float = 0.05,
+    b_water: float = 0.10,
+    max_dist_water: int = 15,
+    connectivity: int = 4,
 ) -> WaterBoostedKernelRule:
     return WaterBoostedKernelRule(
-        3, 2, source_raw=_PORT, a=a, b=b, a_water=a_water, b_water=b_water,
-        max_dist=5, max_dist_water=max_dist_water, connectivity=connectivity,
+        3,
+        2,
+        source_raw=_PORT,
+        a=a,
+        b=b,
+        a_water=a_water,
+        b_water=b_water,
+        max_dist=5,
+        max_dist_water=max_dist_water,
+        connectivity=connectivity,
         rule_name=f"LongboatRuinToPort_c{connectivity}_w{max_dist_water}",
     )
 
@@ -789,7 +929,12 @@ class RuleSimulator:
                 for rule in group:
                     p_grid = rule._p_at_dist(dist)
                     rule.apply_with_dist(grids, dist, in_range, p_grid, rng, static)
-            for (source_classes, metric, max_dist, max_dist_water), group in water_kernel_groups.items():
+            for (
+                source_classes,
+                metric,
+                max_dist,
+                max_dist_water,
+            ), group in water_kernel_groups.items():
                 # Shared source mask + normal dist + water dist
                 mask = grids == source_classes[0]
                 for c in source_classes[1:]:
@@ -812,19 +957,21 @@ class RuleSimulator:
 class RuleSimPredictor(IslandPredictor):
     """Wraps RuleSimulator for the IslandModel interface."""
 
-    rules: list[Rule] = field(default_factory=lambda: [
-        RuinToForest(),
-        SettlementToRuin(),
-        RuinToSettlement(),
-        RuinToPlains(),
-        SettlementToPort(),
-        RuinToPort(),
-        PortToRuin(),
-        PlainsToSettlement(),
-        ForestToSettlement(),
-        PlainsToRuin(),
-        ForestToRuin(),
-    ])
+    rules: list[Rule] = field(
+        default_factory=lambda: [
+            RuinToForest(),
+            SettlementToRuin(),
+            RuinToSettlement(),
+            RuinToPlains(),
+            SettlementToPort(),
+            RuinToPort(),
+            PortToRuin(),
+            PlainsToSettlement(),
+            ForestToSettlement(),
+            PlainsToRuin(),
+            ForestToRuin(),
+        ],
+    )
     n_realizations: int = 1000
     n_years: int = 50
     rng_seed: int = 42

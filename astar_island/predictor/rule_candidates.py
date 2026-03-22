@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 import numpy as np
 from numpy.typing import NDArray
 
@@ -96,8 +94,7 @@ class SpatialKernelRule(Rule):
         static: StaticMasks,
         rng: np.random.Generator,
     ) -> None:
-        from astar_island.predictor.rulesim import CLASS_TO_RAW
-        from astar_island.predictor.rulesim import RAW_TO_CLASS
+        from astar_island.predictor.rulesim import RAW_TO_CLASS  # noqa: PLC0415
 
         n, h, w = grids.shape
         old_class = RAW_TO_CLASS[self.old_type]
@@ -107,7 +104,11 @@ class SpatialKernelRule(Rule):
         if self.trigger_type is not None:
             trigger_class = RAW_TO_CLASS[self.trigger_type]
             is_trigger = grids == trigger_class
-            padded = np.pad(is_trigger, ((0, 0), (self.max_dist, self.max_dist), (self.max_dist, self.max_dist)), constant_values=False)
+            padded = np.pad(
+                is_trigger,
+                ((0, 0), (self.max_dist, self.max_dist), (self.max_dist, self.max_dist)),
+                constant_values=False,
+            )
             has_trigger = np.zeros((n, h, w), dtype=bool)
             for dy in range(-self.max_dist, self.max_dist + 1):
                 for dx in range(-self.max_dist, self.max_dist + 1):
@@ -154,19 +155,29 @@ def generate_candidates(
 
     for old_type, new_type in sorted(observed_pairs):
         # Unconditional rule
-        candidates.append(SpatialKernelRule(
-            old_type=old_type, new_type=new_type,
-            trigger_type=None, max_dist=1, p=0.1,
-        ))
+        candidates.append(
+            SpatialKernelRule(
+                old_type=old_type,
+                new_type=new_type,
+                trigger_type=None,
+                max_dist=1,
+                p=0.1,
+            ),
+        )
 
         # Spatial trigger rules
         for trigger_type in sorted(neighbor_types):
             if trigger_type == old_type:
                 continue
-            for dist in range(1, max_dist + 1):
-                candidates.append(SpatialKernelRule(
-                    old_type=old_type, new_type=new_type,
-                    trigger_type=trigger_type, max_dist=dist, p=0.1,
-                ))
+            candidates.extend(
+                SpatialKernelRule(
+                    old_type=old_type,
+                    new_type=new_type,
+                    trigger_type=trigger_type,
+                    max_dist=dist,
+                    p=0.1,
+                )
+                for dist in range(1, max_dist + 1)
+            )
 
     return candidates

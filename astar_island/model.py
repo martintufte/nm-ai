@@ -1,5 +1,7 @@
 """Base interface for Astar Island prediction models."""
 
+from __future__ import annotations
+
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from numpy.typing import NDArray
 from astar_island.client import N_CLASSES
 from astar_island.client import RoundData
 from astar_island.client import ViewPortData
+from astar_island.query_selector import QuerySelector
 from astar_island.rules import GameRules
 
 # Mapping from raw grid values to class indices
@@ -114,12 +117,13 @@ class IslandModel:
     initial_grids: list[NDArray[np.int16]]
     query_counts: dict[int, NDArray[np.int32]]
     predictor: IslandPredictor
+    selector: QuerySelector
     rules: GameRules = field(default_factory=GameRules)
     observed_viewports: list[ViewPortData] = field(default_factory=list)
     _fitted: bool = field(default=True, repr=False)
 
     @classmethod
-    def from_round_data(cls, round_data: RoundData, predictor: IslandPredictor) -> "IslandModel":
+    def from_round_data(cls, round_data: RoundData, predictor: IslandPredictor) -> IslandModel:
         """Initialize model state for all seeds from round data."""
         h, w = round_data.map_height, round_data.map_width
 
@@ -129,14 +133,24 @@ class IslandModel:
         ]
         initial_grids = [seed_data.grid for seed_data in round_data.seeds]
         query_counts = {i: np.zeros((h, w), dtype=np.int32) for i in range(round_data.seeds_count)}
+        selector = QuerySelector(initial_grids, query_counts)
 
         return cls(
             initial_states=initial_states,
             initial_grids=initial_grids,
             query_counts=query_counts,
             predictor=predictor,
+            selector=selector,
             rules=GameRules(),
         )
+
+    def select_query(self) -> tuple[int, int, int]:
+        """Select the next viewport query based on current observations.
+
+        Returns:
+            (seed_index, x, y) tuple.
+        """
+        return self.selector.select_query()
 
     def update(self, result: ViewPortData) -> None:
         """Update model state after observing a viewport."""
@@ -154,6 +168,14 @@ class IslandModel:
             result.viewport_x : result.viewport_x + result.viewport_w,
         ] += 1
 
+        # Update query selector with observed changes
+        self.selector.update(
+            seed_index=result.seed_index,
+            x=result.viewport_x,
+            y=result.viewport_y,
+            observed_grid=result.grid,
+        )
+
         self.observed_viewports.append(result)
         self._fitted = False
 
@@ -161,21 +183,86 @@ class IslandModel:
         """Fit the predictor on observed data from all seeds."""
         if not self.observed_viewports:
             return
+
         n_seeds = len(self.initial_states)
         obs = [self.observed_probs(i) for i in range(n_seeds)]
         counts = [self.query_counts[i] for i in range(n_seeds)]
         self.predictor.fit(self.initial_states, obs, counts)
         self._fitted = True
 
+    def _empirical_class_ratios(self) -> NDArray[np.float64] | None:
+        """Compute per-class scaling ratios from observed vs predicted distributions.
+
+        Aggregates all observed dynamic cells across all seeds. For each class,
+        computes ratio = empirical_freq / predicted_freq. Returns None if no
+        observations are available.
+
+        Returns:
+            (N_CLASSES,) ratio array, or None.
+        """
+        if not self.observed_viewports:
+            return None
+
+        empirical_totals = np.zeros(N_CLASSES, dtype=np.float64)
+        predicted_totals = np.zeros(N_CLASSES, dtype=np.float64)
+
+        for seed_idx in range(len(self.initial_states)):
+            grid = self.initial_grids[seed_idx]
+            counts = self.query_counts[seed_idx]
+            observed = counts > 0
+            static = (grid == 10) | (grid == 5)
+            dynamic_observed = observed & ~static
+
+            if not dynamic_observed.any():
+                continue
+
+            # Empirical distribution from observations
+            obs = self.observed_probs(seed_idx)
+            empirical_totals += obs[dynamic_observed].sum(axis=0)
+
+            # Predicted distribution (raw, before adjustment)
+            pred = self.predictor.predict(seed_state=self.initial_states[seed_idx])
+            pred = self.rules.enforce_probs(pred, grid)
+            predicted_totals += pred[dynamic_observed].sum(axis=0)
+
+        # Avoid division by zero
+        eps = 1e-10
+        ratios = empirical_totals / np.maximum(predicted_totals, eps)
+
+        # Where we have no empirical mass, don't scale (ratio=1)
+        ratios[empirical_totals < eps] = 1.0
+
+        return ratios
+
     def predict(self, seed_index: int) -> NDArray[np.float64]:
         """Generate predictions for a seed, then enforce rules and min probability.
 
         Automatically fits the predictor if new observations have been added.
+        After rule enforcement, scales per-class probabilities so that the
+        predicted distribution on observed cells matches the empirical one.
         """
+        # Fit the model to the observed viewports
         if not self._fitted and self.observed_viewports:
             self.fit()
+
+        # Predict the probabilities
         probs = self.predictor.predict(seed_state=self.initial_states[seed_index])
-        return self.rules.enforce_probs(probs, self.initial_grids[seed_index])
+        probs = self.rules.enforce_probs(probs, self.initial_grids[seed_index])
+
+        # Adjust predictions to match empirical class distribution
+        ratios = self._empirical_class_ratios()
+        if ratios is not None:
+            grid = self.initial_grids[seed_index]
+            static = (grid == 10) | (grid == 5)
+            dynamic = ~static
+
+            # Scale each class by its ratio on dynamic cells only
+            probs[dynamic] *= ratios[np.newaxis, :]
+
+            # Re-enforce rules (handles renormalization)
+            probs = self.rules.enforce_probs(probs, grid)
+
+        return probs
 
     def observed_probs(self, seed_index: int) -> NDArray[np.float64]:
         """Build a probability array from observed viewport realizations.
@@ -221,4 +308,4 @@ class IslandModel:
         probs[water] = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         probs[mountain] = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
-        return self.rules.enforce_probs(probs, grid)
+        return probs

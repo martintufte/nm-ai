@@ -1,0 +1,5 @@
+{
+  "round_number": 0,
+  "n_seeds": 5,
+  "rules": "Game Rules Status:\n  HOLDS   static_mountains\n  HOLDS   static_water\n  HOLDS   ports_adjacent_to_water\n  BROKEN  ports_were_settlements  (1 violations)\n  HOLDS   no_settlements_on_water\n  HOLDS   no_settlements_on_mountains\n  HOLDS   no_ruins_on_water\n  HOLDS   no_ruins_on_mountains\n  HOLDS   no_forests_on_water\n  HOLDS   no_forests_on_mountains\n  HOLDS   no_mountains_on_non_mountains\n  HOLDS   water_stays_empty_class\n  HOLDS   mountains_stay_mountain"
+}

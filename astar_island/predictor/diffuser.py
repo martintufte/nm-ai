@@ -67,7 +67,7 @@ class TerrainPriors:
         default_factory=lambda: np.array([0.10, 0.40, 0.00, 0.00, 0.50, 0.00]),
     )
     forest: NDArray[np.float64] = field(
-        default_factory=lambda: np.array([0.15, 0.05, 0.00, 0.00, 0.80, 0.00]),
+        default_factory=lambda: np.array([0.15, 0.00, 0.00, 0.00, 0.85, 0.00]),
     )
     empty_land: NDArray[np.float64] = field(
         default_factory=lambda: np.array([0.50, 0.15, 0.00, 0.00, 0.35, 0.00]),
@@ -91,7 +91,7 @@ class DiffusionParams:
             IDENTITY_KERNEL,  # mountain: static
         ],
     )
-    n_steps: int = 3
+    n_steps: int = 2
     p_port: float = 0.4  # fraction of settlement prob converted to port on coastal cells
     p_ruin: float = 0.2  # fraction of settlement prob converted to ruin on all dynamic cells
 
@@ -233,6 +233,18 @@ class DiffusionPredictor(IslandPredictor):
         self.priors = terrain_priors or TerrainPriors()
         self.diffusion = diffusion or DiffusionParams()
 
+    def pack_params(self) -> NDArray[np.float64]:
+        """Serialize parameters to a flat unconstrained vector (14 params)."""
+        from astar_island.predictor.fitting import pack_diffusion_params  # noqa: PLC0415
+
+        return pack_diffusion_params(self.priors, self.diffusion)
+
+    def unpack_params(self, x: NDArray[np.float64]) -> None:
+        """Deserialize a flat unconstrained vector and apply to self."""
+        from astar_island.predictor.fitting import unpack_diffusion_params  # noqa: PLC0415
+
+        self.priors, self.diffusion = unpack_diffusion_params(x)
+
     def predict(self, seed_state: SeedState) -> NDArray[np.float64]:
         static_mask = seed_state.water_mask | seed_state.mountain_mask
         prior = build_prior(seed_state, self.priors)
@@ -248,16 +260,9 @@ class DiffusionPredictor(IslandPredictor):
         seed_states: list[SeedState],
         observed_probs: list[NDArray[np.float64]],
         query_counts: list[NDArray[np.int32]] | None = None,
-        max_iter: int = 500,
+        max_iter: int = 200,
     ) -> None:
         """Optimize priors and kernels to maximize likelihood of observed probs."""
-        from astar_island.predictor.fitting import fit_diffusion  # noqa: PLC0415
+        from astar_island.predictor.fitting import fit_predictor  # noqa: PLC0415
 
-        self.priors, self.diffusion = fit_diffusion(
-            self.priors,
-            self.diffusion,
-            seed_states,
-            observed_probs,
-            query_counts=query_counts,
-            max_iter=max_iter,
-        )
+        fit_predictor(self, seed_states, observed_probs, query_counts, max_iter)

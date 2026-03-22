@@ -187,15 +187,13 @@ def run_experiment(
     )
 
     # Run viewport queries
+    for _ in range(n_queries):
+        seed_idx, x, y = model.select_query()
+        result = sim.simulate(sim.round_id, seed_idx, x, y)
+        model.update(result)
+
     if n_queries > 0:
-        from astar_island.query_selector import select_queries  # noqa: PLC0415
-
-        queries = select_queries(model)
-        for seed_idx, x, y in queries:
-            result = sim.simulate(sim.round_id, seed_idx, x, y)
-            model.update(result)
-
-        LOGGER.info("Ran %d queries", len(queries))
+        LOGGER.info("Ran %d queries", n_queries)
 
     # Generate predictions
     predictions: dict[int, NDArray[np.float64]] = {}
@@ -281,8 +279,12 @@ def _build_predictor(name: str, ground_truth: NDArray[np.float64] | None = None)
         from astar_island.predictor import RuleSimPredictor  # noqa: PLC0415
 
         return RuleSimPredictor()
+    if name == "interactions":
+        from astar_island.predictor import InteractionDiffusionPredictor  # noqa: PLC0415
 
-    msg = f"Unknown predictor: {name!r}. Choose from: diffusion, empty, uniform, perfect, rulesim"
+        return InteractionDiffusionPredictor()
+
+    msg = f"Unknown predictor: {name!r}. Choose from: diffusion, interactions, empty, uniform, perfect, rulesim"
     raise ValueError(msg)
 
 
@@ -294,7 +296,7 @@ def main() -> None:
     parser.add_argument(
         "--predictor",
         default="diffusion",
-        choices=["diffusion", "empty", "uniform", "perfect", "rulesim"],
+        choices=["diffusion", "interactions", "empty", "uniform", "perfect", "rulesim"],
         help="Predictor to benchmark (default: diffusion)",
     )
     parser.add_argument(
