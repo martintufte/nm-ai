@@ -263,7 +263,7 @@ class GameRules:
         self,
         probs: NDArray[np.float64],
         initial_grid: NDArray[np.int16],
-        min_prob: float = 0.01,
+        min_prob: float = 0.005,
     ) -> NDArray[np.float64]:
         """Enforce rules on a probability array with a min probability floor.
 

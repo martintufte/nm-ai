@@ -26,7 +26,8 @@ def _build_predictors(rounds: list[int]) -> dict[str, IslandPredictor]:
     """Build all predictors to benchmark."""
     from astar_island.predictor import DiffusionPredictor  # noqa: PLC0415
     from astar_island.predictor import EmptyPredictor  # noqa: PLC0415
-    from astar_island.predictor import RuleSimPredictor  # noqa: PLC0415
+    from astar_island.predictor import InteractionDiffusionPredictor  # noqa: PLC0415
+    # from astar_island.predictor import RuleSimPredictor  # noqa: PLC0415
     from astar_island.predictor import UniformPredictor  # noqa: PLC0415
 
     # PerfectPredictor needs GT from each round, so we use a factory
@@ -34,7 +35,8 @@ def _build_predictors(rounds: list[int]) -> dict[str, IslandPredictor]:
         "Empty": EmptyPredictor(),
         "Uniform": UniformPredictor(),
         "Diffusion": DiffusionPredictor(),
-        "RuleSim": RuleSimPredictor(),
+        # "Interactions": InteractionDiffusionPredictor(),
+        # "RuleSim": RuleSimPredictor(),
         "Perfect": None,  # built per-round
     }
     return predictors  # type: ignore[return-value]
@@ -44,7 +46,7 @@ def benchmark_round(
     round_number: int,
     predictors: dict[str, IslandPredictor | None],
     n_queries: int = 0,
-    rng_seed: int = 42,
+    rng_seed: int = 43,
 ) -> dict[str, float]:
     """Run all predictors on a single round, return avg scores."""
     from astar_island.predictor import PerfectPredictor  # noqa: PLC0415
@@ -58,20 +60,18 @@ def benchmark_round(
     for name, predictor in predictors.items():
         # Build PerfectPredictor per-round with its ground truth
         if predictor is None:
-            predictor = PerfectPredictor(sim.ground_truth)
+            predictor = PerfectPredictor(ground_truth=sim.ground_truth)
 
         model = IslandModel.from_round_data(rd, predictor)
 
         # Run queries if requested
         if n_queries > 0:
-            from astar_island.query_selector import select_queries  # noqa: PLC0415
-
             # Fresh simulator per predictor so budget resets
             pred_sim = AstarIslandSimulator.from_round_number(
                 round_number, queries_max=n_queries, seed=rng_seed,
             )
-            queries = select_queries(model)
-            for seed_idx, x, y in queries:
+            for _ in range(n_queries):
+                seed_idx, x, y = model.select_query()
                 result = pred_sim.simulate(pred_sim.round_id, seed_idx, x, y)
                 model.update(result)
 
@@ -134,7 +134,7 @@ def save_results(
     values = [avg_scores[n] for n in names]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    colors = ["#7a7f8a", "#d4b96a", "#2d7a2d", "#c75030", "#30b5c7"]
+    colors = ["#7a7f8a", "#d4b96a", "#2d7a2d", "#6a4dc7", "#c75030", "#30b5c7"]
     bars = ax.bar(names, values, color=colors[: len(names)])
     ax.set_ylabel("Average Score")
     ax.set_title(f"Predictor Benchmark — {len(rounds)} rounds, {n_queries} queries")
