@@ -1,9 +1,4 @@
-"""Benchmark predictors across all saved rounds.
-
-Usage:
-    uv run python -m astar_island.benchmark
-    uv run python -m astar_island.benchmark --rounds 1-9 --queries 50
-"""
+"""Benchmark predictors across all saved rounds."""
 
 import argparse
 import json
@@ -42,7 +37,7 @@ def benchmark_round(
     round_number: int,
     predictors: dict[str, IslandPredictor | None],
     n_queries: int = 0,
-    rng_seed: int = 42,
+    rng_seed: int = 43,
 ) -> dict[str, float]:
     """Run all predictors on a single round, return avg scores."""
     from astar_island.predictor import PerfectPredictor  # noqa: PLC0415
@@ -122,7 +117,7 @@ def save_results(
     results = {
         "rounds": rounds,
         "n_queries": n_queries,
-        "per_round": {name: {str(r): s for r, s in zip(rounds, scores)} for name, scores in per_round.items()},
+        "per_round": {name: {str(r): s for r, s in zip(rounds, scores, strict=True)} for name, scores in per_round.items()},
         "averages": avg_scores,
     }
     (out_dir / "results.json").write_text(json.dumps(results, indent=2))
@@ -137,7 +132,7 @@ def save_results(
     ax.set_title(f"Predictor Benchmark — {len(rounds)} rounds, {n_queries} queries")
     ax.set_ylim(0, 100)
 
-    for bar, val in zip(bars, values):
+    for bar, val in zip(bars, values, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 1,

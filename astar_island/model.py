@@ -97,6 +97,14 @@ class IslandPredictor(ABC):
             (H, W, 6) probability array, each cell sums to 1.0.
         """
 
+    def fit(
+        self,
+        seed_states: list[SeedState],
+        observed_probs: list[NDArray[np.float64]],
+        query_counts: list[NDArray[np.int32]] | None = None,
+    ) -> None:
+        """Fit predictor parameters to observed data. No-op by default."""
+
 
 @dataclass
 class IslandModel:
@@ -108,6 +116,7 @@ class IslandModel:
     predictor: IslandPredictor
     rules: GameRules = field(default_factory=GameRules)
     observed_viewports: list[ViewPortData] = field(default_factory=list)
+    _fitted: bool = field(default=True, repr=False)
 
     @classmethod
     def from_round_data(cls, round_data: RoundData, predictor: IslandPredictor) -> "IslandModel":
@@ -129,11 +138,6 @@ class IslandModel:
             rules=GameRules(),
         )
 
-    def predict(self, seed_index: int) -> NDArray[np.float64]:
-        """Generate predictions for a seed, then enforce rules and min probability."""
-        probs = self.predictor.predict(seed_state=self.initial_states[seed_index])
-        return self.rules.enforce_probs(probs, self.initial_grids[seed_index])
-
     def update(self, result: ViewPortData) -> None:
         """Update model state after observing a viewport."""
         self.rules.validate(
@@ -151,6 +155,27 @@ class IslandModel:
         ] += 1
 
         self.observed_viewports.append(result)
+        self._fitted = False
+
+    def fit(self) -> None:
+        """Fit the predictor on observed data from all seeds."""
+        if not self.observed_viewports:
+            return
+        n_seeds = len(self.initial_states)
+        obs = [self.observed_probs(i) for i in range(n_seeds)]
+        counts = [self.query_counts[i] for i in range(n_seeds)]
+        self.predictor.fit(self.initial_states, obs, counts)
+        self._fitted = True
+
+    def predict(self, seed_index: int) -> NDArray[np.float64]:
+        """Generate predictions for a seed, then enforce rules and min probability.
+
+        Automatically fits the predictor if new observations have been added.
+        """
+        if not self._fitted and self.observed_viewports:
+            self.fit()
+        probs = self.predictor.predict(seed_state=self.initial_states[seed_index])
+        return self.rules.enforce_probs(probs, self.initial_grids[seed_index])
 
     def observed_probs(self, seed_index: int) -> NDArray[np.float64]:
         """Build a probability array from observed viewport realizations.
