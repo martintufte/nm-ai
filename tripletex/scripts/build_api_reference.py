@@ -280,7 +280,7 @@ def main() -> None:
     # Use full spec schemas but only competition-relevant paths
     comp_paths = set(comp_spec.get("paths", {}).keys())
     # Also include endpoints from the full spec that are useful but missing from competition spec
-    _EXTRA_PATHS = {
+    extra_paths = {
         "/ledger",
         "/ledger/accountingDimensionName",
         "/ledger/accountingDimensionName/{id}",
@@ -288,7 +288,7 @@ def main() -> None:
         "/ledger/accountingDimensionValue/list",
         "/ledger/accountingDimensionValue/{id}",
     }
-    comp_paths |= _EXTRA_PATHS
+    comp_paths |= extra_paths
     filtered_paths = {
         path: ops for path, ops in full_spec.get("paths", {}).items() if path in comp_paths
     }

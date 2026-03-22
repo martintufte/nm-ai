@@ -29,9 +29,11 @@ def _build_system_prompt(domains: list[str] | None = None) -> str:
                     parts.append(domain_file.read_text())
     else:
         # No domain hint — load all domain skills (legacy behavior)
-        for p in sorted(_OPTIMALITY_DIR.glob("*.md")):
-            if p.name != "_optimality_agent.md":
-                parts.append(p.read_text())
+        parts.extend(
+            p.read_text()
+            for p in sorted(_OPTIMALITY_DIR.glob("*.md"))
+            if p.name != "_optimality_agent.md"
+        )
 
     optimality_skills = "\n\n".join(parts)
 

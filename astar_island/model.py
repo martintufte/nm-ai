@@ -97,7 +97,7 @@ class IslandPredictor(ABC):
             (H, W, 6) probability array, each cell sums to 1.0.
         """
 
-    def fit(
+    def fit(  # noqa: B027
         self,
         seed_states: list[SeedState],
         observed_probs: list[NDArray[np.float64]],

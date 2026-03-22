@@ -215,6 +215,10 @@ def fit_diffusion(
     fitted_priors, fitted_diffusion = unpack_params(result.x)
     LOGGER.info(
         "Fit complete: NLL %.1f -> %.1f (%d iterations, success=%s, p_port=%.3f)",
-        loss0, result.fun, result.nit, result.success, fitted_diffusion.p_port,
+        loss0,
+        result.fun,
+        result.nit,
+        result.success,
+        fitted_diffusion.p_port,
     )
     return fitted_priors, fitted_diffusion

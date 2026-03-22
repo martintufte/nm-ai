@@ -81,14 +81,16 @@ class TerrainPriors:
 class DiffusionParams:
     """Parameters for the diffusion step."""
 
-    kernels: list[SymmetricKernel] = field(default_factory=lambda: [
-        IDENTITY_KERNEL,  # empty: no spread
-        SymmetricKernel(edge=0.04),  # settlement
-        IDENTITY_KERNEL,  # port: no spread
-        IDENTITY_KERNEL,  # ruin: no spread
-        SymmetricKernel(edge=0.01),  # forest
-        IDENTITY_KERNEL,  # mountain: static
-    ])
+    kernels: list[SymmetricKernel] = field(
+        default_factory=lambda: [
+            IDENTITY_KERNEL,  # empty: no spread
+            SymmetricKernel(edge=0.04),  # settlement
+            IDENTITY_KERNEL,  # port: no spread
+            IDENTITY_KERNEL,  # ruin: no spread
+            SymmetricKernel(edge=0.01),  # forest
+            IDENTITY_KERNEL,  # mountain: static
+        ],
+    )
     n_steps: int = 3
     p_port: float = 0.4  # fraction of settlement prob converted to port on coastal cells
     p_ruin: float = 0.2  # fraction of settlement prob converted to ruin on all dynamic cells
@@ -252,6 +254,10 @@ class DiffusionPredictor(IslandPredictor):
         from astar_island.predictor.fitting import fit_diffusion  # noqa: PLC0415
 
         self.priors, self.diffusion = fit_diffusion(
-            self.priors, self.diffusion, seed_states, observed_probs,
-            query_counts=query_counts, max_iter=max_iter,
+            self.priors,
+            self.diffusion,
+            seed_states,
+            observed_probs,
+            query_counts=query_counts,
+            max_iter=max_iter,
         )

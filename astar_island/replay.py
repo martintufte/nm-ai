@@ -31,9 +31,9 @@ Usage:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import numpy as np
 from numpy.typing import NDArray
@@ -172,7 +172,7 @@ class Replay:
                     step=raw_frame["step"],
                     grid=np.array(raw_frame["grid"], dtype=np.int16),
                     settlements=settlements,
-                )
+                ),
             )
         frames.sort(key=lambda f: f.step)
         return cls(
@@ -200,7 +200,7 @@ class Replay:
                     old=int(prev[y, x]),
                     new=int(curr[y, x]),
                 )
-                for y, x in zip(ys, xs)
+                for y, x in zip(ys, xs, strict=True)
             ]
             transitions.append(step_transitions)
         return transitions
@@ -241,7 +241,7 @@ class Replay:
                 old=int(fa.grid[y, x]),
                 new=int(fb.grid[y, x]),
             )
-            for y, x in zip(ys, xs)
+            for y, x in zip(ys, xs, strict=True)
         ]
 
     def cell_history(self, x: int, y: int) -> list[CellTransition]:
@@ -278,13 +278,19 @@ class Replay:
         """Print a summary of all transition types."""
         counts = self.transition_counts()
         total = sum(counts.values())
-        print(f"Total cell transitions: {total}")
-        print(f"Steps with changes: {sum(1 for ts in self._transitions if ts)}/{len(self._transitions)}")
-        print(f"Cells ever changed: {self.cells_ever_changed().sum()}/{self.width * self.height}")
-        print()
-        print("Transition types (old -> new):")
+        print(f"Total cell transitions: {total}")  # noqa: T201
+        print(  # noqa: T201
+            f"Steps with changes: {sum(1 for ts in self._transitions if ts)}/{len(self._transitions)}",
+        )
+        print(  # noqa: T201
+            f"Cells ever changed: {self.cells_ever_changed().sum()}/{self.width * self.height}",
+        )
+        print()  # noqa: T201
+        print("Transition types (old -> new):")  # noqa: T201
         for (old, new), count in sorted(counts.items(), key=lambda x: -x[1]):
-            print(f"  {old:>12s} -> {new:<12s}  {count:5d}  ({100 * count / total:.1f}%)")
+            print(  # noqa: T201
+                f"  {old:>12s} -> {new:<12s}  {count:5d}  ({100 * count / total:.1f}%)",
+            )
 
     # --- repr ---
 

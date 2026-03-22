@@ -17,7 +17,7 @@ LOGGER = logging.getLogger(__name__)
 EXPERIMENTS_DIR = Path(__file__).parent / "experiments"
 
 
-def _build_predictors(rounds: list[int]) -> dict[str, IslandPredictor]:
+def _build_predictors(rounds: list[int]) -> dict[str, IslandPredictor | None]:
     """Build all predictors to benchmark."""
     from astar_island.predictor import DiffusionPredictor  # noqa: PLC0415
     from astar_island.predictor import EmptyPredictor  # noqa: PLC0415
@@ -30,7 +30,7 @@ def _build_predictors(rounds: list[int]) -> dict[str, IslandPredictor]:
         "Diffusion": DiffusionPredictor(),
         "Perfect": None,  # built per-round
     }
-    return predictors  # type: ignore[return-value]
+    return predictors
 
 
 def benchmark_round(
@@ -43,7 +43,9 @@ def benchmark_round(
     from astar_island.predictor import PerfectPredictor  # noqa: PLC0415
 
     sim = AstarIslandSimulator.from_round_number(
-        round_number, queries_max=n_queries, seed=rng_seed,
+        round_number,
+        queries_max=n_queries,
+        seed=rng_seed,
     )
     rd = sim.get_round(sim.round_id)
 
@@ -51,7 +53,7 @@ def benchmark_round(
     for name, predictor in predictors.items():
         # Build PerfectPredictor per-round with its ground truth
         if predictor is None:
-            predictor = PerfectPredictor(sim.ground_truth)
+            predictor = PerfectPredictor(sim.ground_truth)  # noqa: PLW2901
 
         model = IslandModel.from_round_data(rd, predictor)
 
@@ -61,7 +63,9 @@ def benchmark_round(
 
             # Fresh simulator per predictor so budget resets
             pred_sim = AstarIslandSimulator.from_round_number(
-                round_number, queries_max=n_queries, seed=rng_seed,
+                round_number,
+                queries_max=n_queries,
+                seed=rng_seed,
             )
             queries = select_queries(model)
             for seed_idx, x, y in queries:
@@ -94,7 +98,11 @@ def run_benchmark(
         scores = benchmark_round(rnd, predictors, n_queries, rng_seed)
         for name in predictor_names:
             per_round[name].append(scores[name])
-        LOGGER.info("Round %2d: %s", rnd, "  ".join(f"{name}={scores[name]:.1f}" for name in predictor_names))
+        LOGGER.info(
+            "Round %2d: %s",
+            rnd,
+            "  ".join(f"{name}={scores[name]:.1f}" for name in predictor_names),
+        )
 
     avg_scores = {name: float(np.mean(vals)) for name, vals in per_round.items()}
     return per_round, avg_scores
@@ -107,7 +115,8 @@ def save_results(
     n_queries: int,
 ) -> Path:
     """Save benchmark results and bar chart."""
-    from datetime import UTC, datetime  # noqa: PLC0415
+    from datetime import UTC  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
 
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     out_dir = EXPERIMENTS_DIR / f"{timestamp}_benchmark_q{n_queries}"
@@ -117,7 +126,10 @@ def save_results(
     results = {
         "rounds": rounds,
         "n_queries": n_queries,
-        "per_round": {name: {str(r): s for r, s in zip(rounds, scores, strict=True)} for name, scores in per_round.items()},
+        "per_round": {
+            name: {str(r): s for r, s in zip(rounds, scores, strict=True)}
+            for name, scores in per_round.items()
+        },
         "averages": avg_scores,
     }
     (out_dir / "results.json").write_text(json.dumps(results, indent=2))
@@ -168,18 +180,23 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Benchmark Astar Island predictors")
     parser.add_argument("--rounds", default="1-16", help="Rounds to benchmark (e.g. 1-16 or 1,3,5)")
-    parser.add_argument("--queries", type=int, default=0, help="Viewport queries per round (default: 0)")
+    parser.add_argument(
+        "--queries",
+        type=int,
+        default=0,
+        help="Viewport queries per round (default: 0)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="RNG seed (default: 42)")
     args = parser.parse_args()
 
     rounds = _parse_rounds(args.rounds)
     per_round, avg_scores = run_benchmark(rounds, args.queries, args.seed)
 
-    print()
-    print(f"{'Predictor':>12}  {'Avg':>6}")
-    print("-" * 22)
+    print()  # noqa: T201
+    print(f"{'Predictor':>12}  {'Avg':>6}")  # noqa: T201
+    print("-" * 22)  # noqa: T201
     for name, avg in avg_scores.items():
-        print(f"{name:>12}  {avg:>6.1f}")
+        print(f"{name:>12}  {avg:>6.1f}")  # noqa: T201
 
     save_results(rounds, per_round, avg_scores, args.queries)
 

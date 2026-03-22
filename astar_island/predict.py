@@ -60,7 +60,7 @@ def _save_predictions(
     submission_dir.mkdir(parents=True, exist_ok=True)
 
     pred_arrays = {f"seed_{k}": v for k, v in predictions.items()}
-    np.savez_compressed(submission_dir / "predictions.npz", **pred_arrays)
+    np.savez_compressed(submission_dir / "predictions.npz", **pred_arrays)  # type: ignore[arg-type]
 
     # Save per-seed prediction heatmaps
     for seed_idx, preds in predictions.items():
@@ -68,13 +68,21 @@ def _save_predictions(
         seed_dir.mkdir(parents=True, exist_ok=True)
 
         fig = plot_heatmap_grid(preds, suptitle=f"Seed {seed_idx} — Predictions")
-        fig.savefig(seed_dir / "pred_channels.png", dpi=150, bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
+        fig.savefig(
+            seed_dir / "pred_channels.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
         plt.close(fig)
 
         fig = plot_heatmap_combined(preds, title=f"Seed {seed_idx} — Predictions Combined")
-        fig.savefig(seed_dir / "pred_combined.png", dpi=150, bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
+        fig.savefig(
+            seed_dir / "pred_combined.png",
+            dpi=150,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
         plt.close(fig)
 
     meta = {
